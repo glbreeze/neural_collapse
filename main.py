@@ -205,14 +205,14 @@ def main(args):
             batch_size=args.batch_size, shuffle=False)
 
     # ====================  define model ====================
-    model = Detached_ResNet(pretrained=False, num_classes=args.C)
+    model = Detached_ResNet(pretrained=False, num_classes=args.C, backbone=args.model)
     model = model.to(device)
 
     criterion = nn.CrossEntropyLoss()
     criterion_summed = nn.CrossEntropyLoss(reduction='sum')
 
     optimizer = set_optimizer(model, args.feat_wd, args.cls_wd, args.lr, momentum=0.9)
-    lr_scheduler = optim.lr_scheduler.MultiStepLR(optimizer, step_size=args.max_epochs//10, gamma=args.lr_decay)
+    lr_scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=args.max_epochs//10, gamma=args.lr_decay)
 
     graphs1 = Graph_Vars()
     graphs2 = Graph_Vars()
@@ -273,6 +273,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='neural collapse')
     parser.add_argument("--seed", type=int, default=2021, help="random seed")
     parser.add_argument('--dset', type=str, default='cifar10')
+    parser.add_argument('--model', type=str, default='resnet18')
 
     # dataset parameters of CIFAR10
     parser.add_argument('--im_size', type=int, default=32)
