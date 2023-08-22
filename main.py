@@ -1,10 +1,12 @@
 # -*- coding: utf-8 -*-
 import os
+import pdb
 import torch
+import random
 import pickle
 import argparse
 from model import Detached_ResNet
-from utils import Graph_Vars, set_optimizer, set_log_path, log, print_args
+from utils import Graph_Vars, set_optimizer, set_log_path, log, print_args, KoLeoLoss
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -41,21 +43,25 @@ def plot_var(x_list, y_train, y_test, z=None, fname='fig.png', type='', title=No
 def train_one_epoch(model, criterion, device, train_loader, optimizer, epoch, args):
     model.train()
 
+    koleo_loss = KoLeoLoss()
     for batch_idx, (data, target) in enumerate(train_loader, start=1):
         if data.shape[0] != args.batch_size:
             continue
 
         data, target = data.to(device), target.to(device)
-        out = model(data)
+        out, feat = model(data, ret_feat=True)
 
         optimizer.zero_grad()
         loss = criterion(out, target)  # all
+        if args.koleo_wt > 0: 
+            kl_loss = koleo_loss(feat)
+            loss += kl_loss * args.koleo_wt
         loss.backward()
         optimizer.step()
 
         accuracy = torch.mean((torch.argmax(out, dim=1) == target).float()).item()
 
-        if batch_idx % (len(train_loader)//5) == 0:
+        if batch_idx % (len(train_loader)//2) == 0:
             log('Train\tEpoch: {} [{}/{}] Batch Loss: {:.6f} Batch Accuracy: {:.6f}'.format(
                 epoch,
                 batch_idx,
@@ -81,8 +87,8 @@ def analysis(graphs, model, criterion_summed, device, loader, args):
 
             data, target = data.to(device), target.to(device)
 
-            output, h = model(data, ret_feat=True)
-            h = h.value.data.view(data.shape[0], -1)  # B CHW
+            with torch.no_grad():
+                output, h = model(data, ret_feat=True)  # [B, C], [B, 512]
 
             # during calculation of class means, calculate loss
             if computation == 'Mean':
@@ -91,11 +97,10 @@ def analysis(graphs, model, criterion_summed, device, loader, args):
             for c in range(args.C):
                 # features belonging to class c
                 idxs = (target == c).nonzero(as_tuple=True)[0]
-
                 if len(idxs) == 0:  # If no class-c in this batch
                     continue
 
-                h_c = h[idxs, :]  # B CHW
+                h_c = h[idxs, :]  # [B, 512]
 
                 if computation == 'Mean':
                     # update class means
@@ -104,9 +109,9 @@ def analysis(graphs, model, criterion_summed, device, loader, args):
 
                 elif computation == 'Cov':
                     # update within-class cov
-                    z = h_c - mean[c].unsqueeze(0)  # B CHW
-                    cov = torch.matmul(z.unsqueeze(-1), z.unsqueeze(1))   # B CHW 1 # B 1 CHW
-                    Sw += torch.sum(cov, dim=0)
+                    z = h_c - mean[c].unsqueeze(0)  # [B, 512]
+                    cov = torch.matmul(z.unsqueeze(-1), z.unsqueeze(1))   # [B 512 1] [B 1 512] -> [B, 512, 512]
+                    Sw += torch.sum(cov, dim=0)  # [512, 512]
 
                     # during calculation of within-class covariance, calculate:
                     # 1) network's accuracy
@@ -135,18 +140,18 @@ def analysis(graphs, model, criterion_summed, device, loader, args):
     for name, param in model.classifier.named_parameters():
         if 'fc' in name:
             weight_decay_loss += torch.sum(param ** 2).item()
-    reg_loss = loss + 0.5 * args.cls_wt * weight_decay_loss
+    reg_loss = loss + 0.5 * args.cls_wd * weight_decay_loss
     graphs.reg_loss.append(reg_loss)
 
     # global mean
-    muG = torch.mean(M, dim=1, keepdim=True)  # CHW 1
+    muG = torch.mean(M, dim=1, keepdim=True)  # [512, C]
 
     # between-class covariance
-    M_ = M - muG  # [D, C]
+    M_ = M - muG  # [512, C]
     Sb = torch.matmul(M_, M_.T) / args.C
 
     # avg norm
-    W = model.classifier.weight
+    W = model.classifier.weight  #[C, 512]
     M_norms = torch.norm(M_, dim=0)  # [C]
     W_norms = torch.norm(W.T, dim=0) # [C]
 
@@ -239,13 +244,13 @@ def main(args):
 
             # plot Error
             plot_var(epoch_list,
-                     100*(1-graphs1.accuracy),
-                     100*(1-graphs2.accuracy),
+                     [100*(1-acc) for acc in graphs1.accuracy],
+                     [100*(1-acc) for acc in graphs2.accuracy],
                      type='Error',
                      fname=os.path.join(args.output_dir, 'error.png'))
 
             plot_var(epoch_list, graphs1.Sw_invSb, graphs2.Sw_invSb, type='NC1', 
-                     fname=os.path.join(args.output_dir, 'error.png'))
+                     fname=os.path.join(args.output_dir, 'nc1.png'))
 
             plot_var(epoch_list, graphs1.norm_M_CoV, graphs2.norm_M_CoV, z=graphs1.norm_W_CoV, type='NC2-1',
                      fname=os.path.join(args.output_dir, 'nc2_1.png'), zlabel='NC2-1 of Classifier')
@@ -266,6 +271,7 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='neural collapse')
+    parser.add_argument("--seed", type=int, default=2021, help="random seed")
     parser.add_argument('--dset', type=str, default='cifar10')
 
     # dataset parameters of CIFAR10
@@ -279,17 +285,27 @@ if __name__ == "__main__":
     parser.add_argument('--lr_decay', type=float, default=0.1)
     parser.add_argument('--feat_wd', type=float, default=5e-4)
     parser.add_argument('--cls_wd', type=float, default=5e-4)
+    parser.add_argument('--koleo_wt', type=float, default=0.0)
 
     parser.add_argument('--exp_name', type=str, default='baseline')
 
     args = parser.parse_args()
     args.epochs_lr_decay = [args.max_epochs // 3, args.max_epochs * 2 // 3]
-    args.output_dir = os.path.join('/scratch/lg154/sseg/', args.exp_name)
+    args.output_dir = os.path.join('/scratch/lg154/sseg/neural_collapse/result/', args.exp_name)
+    if args.dset == 'cifar100':
+        args.C=100
+    
+    SEED = args.seed
+    torch.manual_seed(SEED)
+    torch.cuda.manual_seed(SEED)
+    np.random.seed(SEED)
+    random.seed(SEED)
+    torch.backends.cudnn.deterministic = True
 
     if not os.path.exists(args.output_dir):
         os.makedirs(args.output_dir)
     set_log_path(args.output_dir)
-    log('save log to path {}'.format(args.output_dir_src))
+    log('save log to path {}'.format(args.output_dir))
     log(print_args(args))
 
     main(args)
