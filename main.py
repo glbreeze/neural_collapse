@@ -212,7 +212,7 @@ def main(args):
     criterion_summed = nn.CrossEntropyLoss(reduction='sum')
 
     optimizer = set_optimizer(model, args.feat_wd, args.cls_wd, args.lr, momentum=0.9)
-    lr_scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=args.epochs_lr_decay, gamma=args.lr_decay)
+    lr_scheduler = optim.lr_scheduler.MultiStepLR(optimizer, step_size=args.max_epochs//10, gamma=args.lr_decay)
 
     graphs1 = Graph_Vars()
     graphs2 = Graph_Vars()
@@ -279,10 +279,10 @@ if __name__ == "__main__":
     parser.add_argument('--padded_im_size', type=int, default=36)
     parser.add_argument('--C', type=int, default=10)
 
-    parser.add_argument('--lr', type=float, default=0.0679)
+    parser.add_argument('--lr', type=float, default=0.05)
     parser.add_argument('--batch_size', type=int, default=128)
     parser.add_argument('--max_epochs', type=int, default=1000)
-    parser.add_argument('--lr_decay', type=float, default=0.1)
+    parser.add_argument('--lr_decay', type=float, default=0.5)
     parser.add_argument('--feat_wd', type=float, default=5e-4)
     parser.add_argument('--cls_wd', type=float, default=5e-4)
     parser.add_argument('--koleo_wt', type=float, default=0.0)
@@ -290,7 +290,6 @@ if __name__ == "__main__":
     parser.add_argument('--exp_name', type=str, default='baseline')
 
     args = parser.parse_args()
-    args.epochs_lr_decay = [args.max_epochs // 3, args.max_epochs * 2 // 3]
     args.output_dir = os.path.join('/scratch/lg154/sseg/neural_collapse/result/', args.exp_name)
     if args.dset == 'cifar100':
         args.C=100

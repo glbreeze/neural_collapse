@@ -20,5 +20,5 @@ singularity exec --nv \
 --overlay ${ext3_path}:ro \
 ${sif_path} /bin/bash -c "
 source /ext3/env.sh
-python main.py --dset cifar100 --koleo_wt 0.01 --exp_name wd5e4_kl01_new
+python main.py --dset cifar10 --koleo_wt 0.01 --exp_name cifar10_wd5e4_kl01
 "
