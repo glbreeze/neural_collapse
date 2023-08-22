@@ -1,0 +1,295 @@
+# -*- coding: utf-8 -*-
+import os
+import torch
+import pickle
+import argparse
+from model import Detached_ResNet
+from utils import Graph_Vars, set_optimizer, set_log_path, log, print_args
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+import numpy as np
+import torch.nn as nn
+import torch.optim as optim
+import matplotlib.pyplot as plt
+from scipy.sparse.linalg import svds
+from torchvision import datasets, transforms
+
+
+# analysis parameters
+exam_epochs = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160, 170, 180, 190, 200, 210, 220,
+              230, 240, 250, 260, 270, 280, 290, 300, 310, 320, 330, 340, 350, 360, 370, 380, 390, 400, 410, 420, 430,
+              440, 450, 460, 470, 480, 490, 500, 510, 520, 530, 540, 550, 560, 570, 580, 590, 600, 610, 620, 630, 640,
+              650, 660, 670, 680, 690, 700, 710, 720, 730, 740, 750, 760, 770, 780, 790, 800, 810, 820, 830, 840, 850,
+              860, 870, 880, 890, 900, 910, 920, 930, 940, 950, 960, 970, 980, 990, 1000]
+
+
+def plot_var(x_list, y_train, y_test, z=None, fname='fig.png', type='', title=None, zlabel=None, ylabel=None):
+    plt.figure()
+    plt.semilogy(x_list, y_train, label='{} of train'.format(type))
+    plt.semilogy(x_list, y_test, label='{} of test'.format(type))
+    if z is not None:
+        plt.semilogy(x_list, z, label=zlabel)
+    plt.legend()
+    plt.xlabel('Epoch')
+    plt.ylabel(ylabel if ylabel is not None else type)
+    plt.title(title if title is not None else type)
+    plt.savefig(fname)
+
+
+def train_one_epoch(model, criterion, device, train_loader, optimizer, epoch, args):
+    model.train()
+
+    for batch_idx, (data, target) in enumerate(train_loader, start=1):
+        if data.shape[0] != args.batch_size:
+            continue
+
+        data, target = data.to(device), target.to(device)
+        out = model(data)
+
+        optimizer.zero_grad()
+        loss = criterion(out, target)  # all
+        loss.backward()
+        optimizer.step()
+
+        accuracy = torch.mean((torch.argmax(out, dim=1) == target).float()).item()
+
+        if batch_idx % (len(train_loader)//5) == 0:
+            log('Train\tEpoch: {} [{}/{}] Batch Loss: {:.6f} Batch Accuracy: {:.6f}'.format(
+                epoch,
+                batch_idx,
+                len(train_loader),
+                loss.item(),
+                accuracy))
+
+
+def analysis(graphs, model, criterion_summed, device, loader, args):
+    model.eval()
+
+    N = [0 for _ in range(args.C)]
+    mean = [0 for _ in range(args.C)]
+    Sw = 0
+
+    loss = 0
+    net_correct = 0
+    NCC_match_net = 0
+
+    for computation in ['Mean', 'Cov']:
+        # pbar = tqdm(total=len(loader), position=0, leave=True)
+        for batch_idx, (data, target) in enumerate(loader, start=1):
+
+            data, target = data.to(device), target.to(device)
+
+            output, h = model(data, ret_feat=True)
+            h = h.value.data.view(data.shape[0], -1)  # B CHW
+
+            # during calculation of class means, calculate loss
+            if computation == 'Mean':
+                loss += criterion_summed(output, target).item()
+
+            for c in range(args.C):
+                # features belonging to class c
+                idxs = (target == c).nonzero(as_tuple=True)[0]
+
+                if len(idxs) == 0:  # If no class-c in this batch
+                    continue
+
+                h_c = h[idxs, :]  # B CHW
+
+                if computation == 'Mean':
+                    # update class means
+                    mean[c] += torch.sum(h_c, dim=0)  #  CHW
+                    N[c] += h_c.shape[0]
+
+                elif computation == 'Cov':
+                    # update within-class cov
+                    z = h_c - mean[c].unsqueeze(0)  # B CHW
+                    cov = torch.matmul(z.unsqueeze(-1), z.unsqueeze(1))   # B CHW 1 # B 1 CHW
+                    Sw += torch.sum(cov, dim=0)
+
+                    # during calculation of within-class covariance, calculate:
+                    # 1) network's accuracy
+                    net_pred = torch.argmax(output[idxs, :], dim=1)
+                    net_correct += sum(net_pred == target[idxs]).item()
+
+                    # 2) agreement between prediction and nearest class center
+                    NCC_scores = torch.stack([torch.norm(h_c[i, :] - M.T, dim=1) for i in range(h_c.shape[0])])
+                    NCC_pred = torch.argmin(NCC_scores, dim=1)
+                    NCC_match_net += sum(NCC_pred == net_pred).item()
+
+        if computation == 'Mean':
+            for c in range(args.C):
+                mean[c] /= N[c]
+                M = torch.stack(mean).T
+            loss /= sum(N)
+        elif computation == 'Cov':
+            Sw /= sum(N)
+
+    graphs.loss.append(loss)
+    graphs.accuracy.append(net_correct / sum(N))
+    graphs.NCC_mismatch.append(1 - NCC_match_net / sum(N))
+
+    # loss with weight decay
+    weight_decay_loss = 0.0
+    for name, param in model.classifier.named_parameters():
+        if 'fc' in name:
+            weight_decay_loss += torch.sum(param ** 2).item()
+    reg_loss = loss + 0.5 * args.cls_wt * weight_decay_loss
+    graphs.reg_loss.append(reg_loss)
+
+    # global mean
+    muG = torch.mean(M, dim=1, keepdim=True)  # CHW 1
+
+    # between-class covariance
+    M_ = M - muG  # [D, C]
+    Sb = torch.matmul(M_, M_.T) / args.C
+
+    # avg norm
+    W = model.classifier.weight
+    M_norms = torch.norm(M_, dim=0)  # [C]
+    W_norms = torch.norm(W.T, dim=0) # [C]
+
+    graphs.norm_M_CoV.append((torch.std(M_norms) / torch.mean(M_norms)).item())
+    graphs.norm_W_CoV.append((torch.std(W_norms) / torch.mean(W_norms)).item())
+
+    # tr{Sw Sb^-1}
+    Sw = Sw.cpu().numpy()
+    Sb = Sb.cpu().numpy()
+    eigvec, eigval, _ = svds(Sb, k=args.C - 1)
+    inv_Sb = eigvec @ np.diag(eigval ** (-1)) @ eigvec.T
+    graphs.Sw_invSb.append(np.trace(Sw @ inv_Sb))
+
+    # ||W^T - M_||
+    normalized_M = M_ / torch.norm(M_, 'fro')
+    normalized_W = W.T / torch.norm(W.T, 'fro')
+    graphs.W_M_dist.append((torch.norm(normalized_W - normalized_M) ** 2).item())
+
+    # mutual coherence
+    def coherence(V):
+        G = V.T @ V  # [C, D] [D, C]
+        G += torch.ones((args.C, args.C), device=device) / (args.C - 1)
+        G -= torch.diag(torch.diag(G))  # [C, C]
+        return torch.norm(G, 1).item() / (args.C * (args.C - 1))
+
+    graphs.cos_M.append(coherence(M_ / M_norms)) # [D, C]
+    graphs.cos_W.append(coherence(W.T / W_norms))
+
+
+def main(args):
+    # ==================== data loader ====================
+    transform2 = transforms.Compose([transforms.Pad((args.padded_im_size - args.im_size) // 2),
+                                     transforms.ToTensor(),
+                                     transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2470, 0.2434, 0.2615))])
+
+    if args.dset == 'cifar10':
+        train_loader = torch.utils.data.DataLoader(
+            datasets.CIFAR10('data', train=True, download=True, transform=transform2),
+            batch_size=args.batch_size, shuffle=True)
+
+        test_loader = torch.utils.data.DataLoader(
+            datasets.CIFAR10('data', train=False, download=True, transform=transform2),
+            batch_size=args.batch_size, shuffle=False)
+    elif args.dset == 'cifar100':
+        train_loader = torch.utils.data.DataLoader(
+            datasets.CIFAR100('data', train=True, download=True, transform=transform2),
+            batch_size=args.batch_size, shuffle=True)
+
+        test_loader = torch.utils.data.DataLoader(
+            datasets.CIFAR100('data', train=False, download=True, transform=transform2),
+            batch_size=args.batch_size, shuffle=False)
+
+    # ====================  define model ====================
+    model = Detached_ResNet(pretrained=False, num_classes=args.C)
+    model = model.to(device)
+
+    criterion = nn.CrossEntropyLoss()
+    criterion_summed = nn.CrossEntropyLoss(reduction='sum')
+
+    optimizer = set_optimizer(model, args.feat_wd, args.cls_wd, args.lr, momentum=0.9)
+    lr_scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=args.epochs_lr_decay, gamma=args.lr_decay)
+
+    graphs1 = Graph_Vars()
+    graphs2 = Graph_Vars()
+
+    epoch_list = []
+    for epoch in range(1, args.max_epochs + 1):
+        train_one_epoch(model, criterion, device, train_loader, optimizer, epoch, args)
+        lr_scheduler.step()
+
+        if epoch in exam_epochs:
+
+            epoch_list.append(epoch)
+            analysis(graphs1, model, criterion_summed, device, train_loader, args)
+            analysis(graphs2, model, criterion_summed, device, test_loader, args)
+
+            log('>>>> epoch {}, train loss:{:.4f}, acc:{:.4f}, NC1:{:.4f}, NC2-1:{:.4f}, NC2-2:{:.4f}, NC3:{:.4f}'.format(
+                epoch, graphs1.loss[-1], graphs1.accuracy[-1], graphs1.Sw_invSb[-1],
+                graphs1.norm_M_CoV[-1], graphs1.cos_M[-1], graphs1.W_M_dist[-1]
+            ))
+
+            log('>>>> epoch {}, test loss:{:.4f}, acc:{:.4f}, NC1:{:.4f}, NC2-1:{:.4f}, NC2-2:{:.4f}, NC3:{:.4f}'.format(
+                epoch, graphs2.loss[-1], graphs2.accuracy[-1], graphs2.Sw_invSb[-1],
+                graphs2.norm_M_CoV[-1], graphs2.cos_M[-1], graphs2.W_M_dist[-1]
+                ))
+
+            # plot loss
+            plot_var(epoch_list, graphs1.loss, graphs2.loss, type='Loss',
+                     fname=os.path.join(args.output_dir, 'loss.png'))
+
+            # plot Error
+            plot_var(epoch_list,
+                     100*(1-graphs1.accuracy),
+                     100*(1-graphs2.accuracy),
+                     type='Error',
+                     fname=os.path.join(args.output_dir, 'error.png'))
+
+            plot_var(epoch_list, graphs1.Sw_invSb, graphs2.Sw_invSb, type='NC1', 
+                     fname=os.path.join(args.output_dir, 'error.png'))
+
+            plot_var(epoch_list, graphs1.norm_M_CoV, graphs2.norm_M_CoV, z=graphs1.norm_W_CoV, type='NC2-1',
+                     fname=os.path.join(args.output_dir, 'nc2_1.png'), zlabel='NC2-1 of Classifier')
+
+            plot_var(epoch_list, graphs1.cos_M, graphs2.cos_M, z=graphs1.cos_W, type='NC2-2',
+                     fname=os.path.join(args.output_dir, 'nc2_2.png'), zlabel='NC2-2 of Classifier')
+
+            plot_var(epoch_list, graphs1.W_M_dist, graphs2.W_M_dist, type='NC3', ylabel='||W^T - H||^2',
+                     fname=os.path.join(args.output_dir, 'nc3.png'))
+
+    fname = os.path.join(args.output_dir, 'graph1.pickle')
+    with open(fname, 'wb') as f:
+        pickle.dump(graphs1, f)
+    fname = os.path.join(args.output_dir, 'graph2.pickle')
+    with open(fname, 'wb') as f:
+        pickle.dump(graphs2, f)
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='neural collapse')
+    parser.add_argument('--dset', type=str, default='cifar10')
+
+    # dataset parameters of CIFAR10
+    parser.add_argument('--im_size', type=int, default=32)
+    parser.add_argument('--padded_im_size', type=int, default=36)
+    parser.add_argument('--C', type=int, default=10)
+
+    parser.add_argument('--lr', type=float, default=0.0679)
+    parser.add_argument('--batch_size', type=int, default=128)
+    parser.add_argument('--max_epochs', type=int, default=1000)
+    parser.add_argument('--lr_decay', type=float, default=0.1)
+    parser.add_argument('--feat_wd', type=float, default=5e-4)
+    parser.add_argument('--cls_wd', type=float, default=5e-4)
+
+    parser.add_argument('--exp_name', type=str, default='baseline')
+
+    args = parser.parse_args()
+    args.epochs_lr_decay = [args.max_epochs // 3, args.max_epochs * 2 // 3]
+    args.output_dir = os.path.join('/scratch/lg154/sseg/', args.exp_name)
+
+    if not os.path.exists(args.output_dir):
+        os.makedirs(args.output_dir)
+    set_log_path(args.output_dir)
+    log('save log to path {}'.format(args.output_dir_src))
+    log(print_args(args))
+
+    main(args)
