@@ -192,7 +192,7 @@ def main(args):
     criterion = nn.CrossEntropyLoss()
     criterion_summed = nn.CrossEntropyLoss(reduction='sum')
 
-    optimizer = set_optimizer(model, args.feat_wd, args.cls_wd, args.lr, momentum=0.9)
+    optimizer = set_optimizer(model, args, momentum=0.9)
     lr_scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=args.max_epochs//10, gamma=args.lr_decay)
 
     graphs1 = Graph_Vars()
@@ -265,8 +265,7 @@ if __name__ == "__main__":
     parser.add_argument('--batch_size', type=int, default=128)
     parser.add_argument('--max_epochs', type=int, default=1000)
     parser.add_argument('--lr_decay', type=float, default=0.5)
-    parser.add_argument('--feat_wd', type=float, default=5e-4)
-    parser.add_argument('--cls_wd', type=float, default=5e-4)
+    parser.add_argument('--wd', type=str, default='54')  # '54'|'01_54' | '01_54_54'
     parser.add_argument('--koleo_wt', type=float, default=0.0)
 
     parser.add_argument('--exp_name', type=str, default='baseline')

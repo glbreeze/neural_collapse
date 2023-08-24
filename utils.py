@@ -39,14 +39,33 @@ class KoLeoLoss(nn.Module):
         return loss
 
 
+def set_optimizer(model, args, momentum):
+    conv_params, bn_params, cls_params = [], [], []
 
-def set_optimizer(model, feature_decay, classifier_decay, lr, momentum):
-    # Group parameters of feature extractor and classifier
+    for name, param in model.named_parameters():
+        if 'conv' in name or "downsample.0" in name or "features.0" in name:
+            conv_params.append(param)
+        elif 'bn' in name or 'downsample.1' in name or "features.1" in name:
+            bn_params.append(param)
+        elif 'classifier' in name or 'fc' in name:
+            cls_params.append(param)
+
+    wds = args.wd.split('_')
+    if len(wds) == 1:
+        conv_wd, bn_wd, cls_wd = [float(wd[0]) / 10**int(wd[1]) for wd in wds] * 3
+    elif len(wds) == 2:
+        conv_wd, cls_wd = [float(wd[0]) / 10**int(wd[1]) for wd in wds]
+        bn_wd = conv_wd
+    elif len(wds) == 3:
+        conv_wd, bn_wd, cls_wd = [float(wd[0]) / 10**int(wd[1]) for wd in wds]
+
     params_to_optimize = [
-        {"params": model.features.parameters(), "weight_decay": feature_decay},
-        {"params": model.classifier.parameters(), "weight_decay": classifier_decay},
+        {"params": conv_params, "weight_decay": conv_wd},
+        {"params": bn_params, "weight_decay": bn_wd},
+        {"params": cls_params, "weight_decay": cls_wd},
     ]
-    optimizer = optim.SGD(params_to_optimize, lr=lr, momentum=momentum)
+
+    optimizer = optim.SGD(params_to_optimize, lr=args.lr, momentum=momentum)
     return optimizer
 
 
