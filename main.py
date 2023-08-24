@@ -5,22 +5,19 @@ import torch
 import random
 import pickle
 import argparse
+from data import get_dataloader
 from model import Detached_ResNet
 from utils import Graph_Vars, set_optimizer, set_log_path, log, print_args, KoLeoLoss
-
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
 
 import numpy as np
 import torch.nn as nn
 import torch.optim as optim
 import matplotlib.pyplot as plt
 from scipy.sparse.linalg import svds
-from torchvision import datasets, transforms
 
 
 # analysis parameters
-exam_epochs = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160, 170, 180, 190, 200, 210, 220,
+exam_epochs = [5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160, 170, 180, 190, 200, 210, 220,
               230, 240, 250, 260, 270, 280, 290, 300, 310, 320, 330, 340, 350, 360, 370, 380, 390, 400, 410, 420, 430,
               440, 450, 460, 470, 480, 490, 500, 510, 520, 530, 540, 550, 560, 570, 580, 590, 600, 610, 620, 630, 640,
               650, 660, 670, 680, 690, 700, 710, 720, 730, 740, 750, 760, 770, 780, 790, 800, 810, 820, 830, 840, 850,
@@ -40,7 +37,8 @@ def plot_var(x_list, y_train, y_test, z=None, fname='fig.png', type='', title=No
     plt.savefig(fname)
 
 
-def train_one_epoch(model, criterion, device, train_loader, optimizer, epoch, args):
+def train_one_epoch(model, criterion, train_loader, optimizer, epoch, args):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.train()
 
     koleo_loss = KoLeoLoss()
@@ -70,12 +68,13 @@ def train_one_epoch(model, criterion, device, train_loader, optimizer, epoch, ar
                 accuracy))
 
 
-def analysis(graphs, model, criterion_summed, device, loader, args):
+def analysis(graphs, model, criterion_summed, loader, args):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.eval()
 
-    N = [0 for _ in range(args.C)]
+    N    = [0 for _ in range(args.C)]
     mean = [0 for _ in range(args.C)]
-    Sw = 0
+    Sw   = 0
 
     loss = 0
     net_correct = 0
@@ -182,27 +181,9 @@ def analysis(graphs, model, criterion_summed, device, loader, args):
 
 
 def main(args):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     # ==================== data loader ====================
-    transform2 = transforms.Compose([transforms.Pad((args.padded_im_size - args.im_size) // 2),
-                                     transforms.ToTensor(),
-                                     transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2470, 0.2434, 0.2615))])
-
-    if args.dset == 'cifar10':
-        train_loader = torch.utils.data.DataLoader(
-            datasets.CIFAR10('data', train=True, download=True, transform=transform2),
-            batch_size=args.batch_size, shuffle=True)
-
-        test_loader = torch.utils.data.DataLoader(
-            datasets.CIFAR10('data', train=False, download=True, transform=transform2),
-            batch_size=args.batch_size, shuffle=False)
-    elif args.dset == 'cifar100':
-        train_loader = torch.utils.data.DataLoader(
-            datasets.CIFAR100('data', train=True, download=True, transform=transform2),
-            batch_size=args.batch_size, shuffle=True)
-
-        test_loader = torch.utils.data.DataLoader(
-            datasets.CIFAR100('data', train=False, download=True, transform=transform2),
-            batch_size=args.batch_size, shuffle=False)
+    train_loader, test_loader = get_dataloader(args)
 
     # ====================  define model ====================
     model = Detached_ResNet(pretrained=False, num_classes=args.C, backbone=args.model)
@@ -219,14 +200,14 @@ def main(args):
 
     epoch_list = []
     for epoch in range(1, args.max_epochs + 1):
-        train_one_epoch(model, criterion, device, train_loader, optimizer, epoch, args)
+        train_one_epoch(model, criterion, train_loader, optimizer, epoch, args)
         lr_scheduler.step()
 
         if epoch in exam_epochs:
 
             epoch_list.append(epoch)
-            analysis(graphs1, model, criterion_summed, device, train_loader, args)
-            analysis(graphs2, model, criterion_summed, device, test_loader, args)
+            analysis(graphs1, model, criterion_summed, train_loader, args)
+            analysis(graphs2, model, criterion_summed, test_loader, args)
 
             log('>>>> epoch {}, train loss:{:.4f}, acc:{:.4f}, NC1:{:.4f}, NC2-1:{:.4f}, NC2-2:{:.4f}, NC3:{:.4f}'.format(
                 epoch, graphs1.loss[-1], graphs1.accuracy[-1], graphs1.Sw_invSb[-1],
@@ -291,7 +272,7 @@ if __name__ == "__main__":
     parser.add_argument('--exp_name', type=str, default='baseline')
 
     args = parser.parse_args()
-    args.output_dir = os.path.join('/scratch/lg154/sseg/neural_collapse/result/', args.exp_name)
+    args.output_dir = os.path.join('/scratch/lg154/sseg/neural_collapse/result/{}'.format(args.dset), args.exp_name)
     if args.dset == 'cifar100':
         args.C=100
     
