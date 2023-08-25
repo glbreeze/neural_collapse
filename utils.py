@@ -50,19 +50,10 @@ def set_optimizer(model, args, momentum):
         elif 'classifier' in name or 'fc' in name:
             cls_params.append(param)
 
-    wds = args.wd.split('_')
-    if len(wds) == 1:
-        conv_wd, bn_wd, cls_wd = [float(wd[0]) / 10**int(wd[1]) for wd in wds] * 3
-    elif len(wds) == 2:
-        conv_wd, cls_wd = [float(wd[0]) / 10**int(wd[1]) for wd in wds]
-        bn_wd = conv_wd
-    elif len(wds) == 3:
-        conv_wd, bn_wd, cls_wd = [float(wd[0]) / 10**int(wd[1]) for wd in wds]
-
     params_to_optimize = [
-        {"params": conv_params, "weight_decay": conv_wd},
-        {"params": bn_params, "weight_decay": bn_wd},
-        {"params": cls_params, "weight_decay": cls_wd},
+        {"params": conv_params, "weight_decay": args.conv_wd},
+        {"params": bn_params, "weight_decay": args.bn_wd},
+        {"params": cls_params, "weight_decay": args.cls_wd},
     ]
 
     optimizer = optim.SGD(params_to_optimize, lr=args.lr, momentum=momentum)

@@ -272,6 +272,14 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     args.output_dir = os.path.join('/scratch/lg154/sseg/neural_collapse/result/{}'.format(args.dset), args.exp_name)
+    wds = args.wd.split('_')
+    if len(wds) == 1:
+        args.conv_wd, args.bn_wd, args.cls_wd = [float(wd[0]) / 10 ** int(wd[1]) for wd in wds] * 3
+    elif len(wds) == 2:
+        args.conv_wd, args.cls_wd = [float(wd[0]) / 10 ** int(wd[1]) for wd in wds]
+        args.bn_wd = args.conv_wd
+    elif len(wds) == 3:
+        args.conv_wd, args.bn_wd, args.cls_wd = [float(wd[0]) / 10 ** int(wd[1]) for wd in wds]
     if args.dset == 'cifar100':
         args.C=100
     
