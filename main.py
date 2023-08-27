@@ -7,7 +7,7 @@ import pickle
 import argparse
 from data import get_dataloader
 from model import Detached_ResNet
-from utils import Graph_Vars, set_optimizer, set_log_path, log, print_args, KoLeoLoss
+from utils import Graph_Vars, set_optimizer, set_optimizer_b, set_log_path, log, print_args, KoLeoLoss
 
 import numpy as np
 import torch.nn as nn
@@ -192,10 +192,11 @@ def main(args):
     criterion = nn.CrossEntropyLoss()
     criterion_summed = nn.CrossEntropyLoss(reduction='sum')
 
-    if args.early_wd > 0:
-        optimizer = set_optimizer(model, args, 0.9, log, conv_wd=args.cls_wd, bn_wd=args.cls_wd, cls_wd=args.cls_wd)
-    else:
+    if args.bwd == '1_1':
         optimizer = set_optimizer(model, args, 0.9, log)
+    else:
+        optimizer = set_optimizer_b(model, args, 0.9, log)
+
     lr_scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=args.max_epochs//10, gamma=args.lr_decay)
 
     graphs1 = Graph_Vars()
@@ -203,9 +204,6 @@ def main(args):
 
     epoch_list = []
     for epoch in range(1, args.max_epochs + 1):
-
-        if (args.early_wd > 0) and (epoch==args.early_wd+1):
-            optimizer = set_optimizer(model, args, 0.9, log)
 
         train_one_epoch(model, criterion, train_loader, optimizer, epoch, args)
         lr_scheduler.step()
@@ -273,7 +271,7 @@ if __name__ == "__main__":
     parser.add_argument('--max_epochs', type=int, default=1000)
     parser.add_argument('--lr_decay', type=float, default=0.5)
     parser.add_argument('--wd', type=str, default='54')  # '54'|'01_54' | '01_54_54'
-    parser.add_argument('--early_wd', type=int, default=0)
+    parser.add_argument('--bwd', type=str, default='1_1')
     parser.add_argument('--koleo_wt', type=float, default=0.0)
 
     parser.add_argument('--exp_name', type=str, default='baseline')
