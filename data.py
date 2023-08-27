@@ -14,7 +14,7 @@ from torchvision import datasets, transforms
 
 def get_dataloader(args):
 
-    if args.dset in ['cifar10' 'stl10']:
+    if args.dset in ['cifar10', 'stl10']:
         normalize = transforms.Normalize(mean=[0.4914, 0.4822, 0.4465], std=[0.2470, 0.2434, 0.2615])
     elif args.dset == 'cifar100':
         normalize = transforms.Normalize(mean=[0.5071, 0.4865, 0.4409], std=[0.2673, 0.2564, 0.2761])
@@ -44,10 +44,10 @@ def get_dataloader(args):
 
     elif args.dset == 'stl10':
         # print('STL10 is on the test')
-        trainloader = torch.utils.data.DataLoader(
+        train_loader = torch.utils.data.DataLoader(
             datasets.STL10('data', split='train', download=True, transform=transform),
             batch_size=args.batch_size, shuffle=True)
-        testloader = torch.utils.data.DataLoader(
+        test_loader = torch.utils.data.DataLoader(
             datasets.STL10('data', split='test', download=True, transform=transform),
             batch_size=args.batch_size, shuffle=False)
 

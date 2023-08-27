@@ -271,7 +271,7 @@ if __name__ == "__main__":
     parser.add_argument('--exp_name', type=str, default='baseline')
 
     args = parser.parse_args()
-    args.output_dir = os.path.join('/scratch/lg154/sseg/neural_collapse/result/{}'.format(args.dset), args.exp_name)
+    args.output_dir = os.path.join('/scratch/lg154/sseg/neural_collapse/result/{}/{}/'.format(args.dset, args.model), args.exp_name)
     wds = args.wd.split('_')
     if len(wds) == 1:
         args.conv_wd, args.bn_wd, args.cls_wd = [float(wd[0]) / 10 ** int(wd[1]) for wd in wds] * 3
