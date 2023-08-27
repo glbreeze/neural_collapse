@@ -39,7 +39,7 @@ class KoLeoLoss(nn.Module):
         return loss
 
 
-def set_optimizer(model, args, momentum):
+def set_optimizer(model, args, momentum, log, conv_wd=None, bn_wd=None, cls_wd=None):
     conv_params, bn_params, cls_params = [], [], []
 
     for name, param in model.named_parameters():
@@ -51,12 +51,16 @@ def set_optimizer(model, args, momentum):
             cls_params.append(param)
 
     params_to_optimize = [
-        {"params": conv_params, "weight_decay": args.conv_wd},
-        {"params": bn_params, "weight_decay": args.bn_wd},
-        {"params": cls_params, "weight_decay": args.cls_wd},
+        {"params": conv_params, "weight_decay": conv_wd if conv_wd is not None else args.conv_wd},
+        {"params": bn_params, "weight_decay": bn_wd if bn_wd is not None else args.bn_wd},
+        {"params": cls_params, "weight_decay": cls_wd if cls_wd is not None else args.cls_wd},
     ]
 
     optimizer = optim.SGD(params_to_optimize, lr=args.lr, momentum=momentum)
+    log('>>>>>Set Optimizer conv_wd:{}, bn_wd:{}, cls_wd:{}'.format(
+        conv_wd if conv_wd is not None else args.conv_wd,
+        bn_wd if bn_wd is not None else args.bn_wd,
+        cls_wd if cls_wd is not None else args.cls_wd))
     return optimizer
 
 
