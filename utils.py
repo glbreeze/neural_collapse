@@ -98,6 +98,45 @@ def set_optimizer_b(model, args, momentum, log,):
     return optimizer
 
 
+def set_optimizer_b1(model, args, momentum, log,):
+    conv_params, bn_params, bnb_params, bnb1_params, cls_params, clsb_params = [], [], [], [], [], []
+
+    for name, param in model.named_parameters():
+        if 'conv' in name or "downsample.0" in name or "features.0" in name:
+            conv_params.append(param)
+        elif 'bn' in name or 'downsample.1' in name or "features.1" in name:
+            if 'weight' in name:
+                bn_params.append(param)
+            else:
+                if (name == 'layer4.2.bn3.bias' and args.model == 'resnet50') or \
+                   (name == 'layer4.1.bn2.bias' and args.model == 'resnet18'):
+                    bnb1_params.append(param)
+                else:
+                    bnb_params.append(param)
+        elif 'classifier' in name or 'fc' in name:
+            if 'weight' in name:
+                cls_params.append(param)
+            else:
+                clsb_params.append(param)
+
+    params_to_optimize = [
+        {"params": conv_params, "weight_decay": args.conv_wd},
+        {"params": bn_params,   "weight_decay": args.bn_wd},                                # W in BN layers
+        {"params": bnb_params,  "weight_decay": args.bn_wd * int(args.bwd.split('_')[0])},  # Bias in BN layers except last BN layer
+        {"params": bnb1_params, "weight_decay": args.bn_wd * int(args.bwd.split('_')[1])},  # Bias in last BN layer
+        {"params": cls_params,  "weight_decay": args.cls_wd},
+        {"params": clsb_params, "weight_decay": args.cls_wd * int(args.bwd.split('_')[2])},
+    ]
+
+    optimizer = optim.SGD(params_to_optimize, lr=args.lr, momentum=momentum)
+    log('>>>>>Set Optimizer conv_wd:{}, bn_wd:{}, bnb_wd:{}, bnb1_wd:{}, cls_wd:{}, clsb_wd:{}'.format(
+        args.conv_wd,
+        args.bn_wd, args.bn_wd * int(args.bwd.split('_')[0]), args.bn_wd * int(args.bwd.split('_')[1]),
+        args.cls_wd, args.cls_wd * int(args.bwd.split('_')[2])
+    ))
+    return optimizer
+
+
 class Graph_Vars:
     def __init__(self):
         self.accuracy = []

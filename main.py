@@ -7,7 +7,7 @@ import pickle
 import argparse
 from data import get_dataloader
 from model import Detached_ResNet
-from utils import Graph_Vars, set_optimizer, set_optimizer_b, set_log_path, log, print_args, KoLeoLoss
+from utils import Graph_Vars, set_optimizer, set_optimizer_b, set_optimizer_b1, set_log_path, log, print_args, KoLeoLoss
 
 import numpy as np
 import torch.nn as nn
@@ -192,10 +192,12 @@ def main(args):
     criterion = nn.CrossEntropyLoss()
     criterion_summed = nn.CrossEntropyLoss(reduction='sum')
 
-    if args.bwd == '1_1':
+    if args.bwd == '1_1' or len(args.bwd) == 1:
         optimizer = set_optimizer(model, args, 0.9, log)
-    else:
+    elif len(args.bwd) == 3:
         optimizer = set_optimizer_b(model, args, 0.9, log)
+    elif len(args.bwd) == 5:
+        optimizer = set_optimizer_b1(model, args, 0.9, log)
 
     lr_scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=args.max_epochs//10, gamma=args.lr_decay)
 
