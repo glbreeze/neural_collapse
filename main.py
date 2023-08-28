@@ -8,6 +8,7 @@ import argparse
 from data import get_dataloader
 from model import Detached_ResNet
 from utils import Graph_Vars, set_optimizer, set_optimizer_b, set_optimizer_b1, set_log_path, log, print_args, KoLeoLoss
+from utils import CrossEntropyLabelSmooth, CrossEntropyHinge
 
 import numpy as np
 import torch.nn as nn
@@ -189,7 +190,12 @@ def main(args):
     model = Detached_ResNet(pretrained=False, num_classes=args.C, backbone=args.model)
     model = model.to(device)
 
-    criterion = nn.CrossEntropyLoss()
+    if args.loss == 'ce':
+        criterion = nn.CrossEntropyLoss()
+    elif args.loss == 'ls':
+        criterion = CrossEntropyLabelSmooth(args.C, epsilon=0.05)
+    elif args.loss == 'ceh':
+        criterion = CrossEntropyHinge(args.C, epsilon=0.05)
     criterion_summed = nn.CrossEntropyLoss(reduction='sum')
 
     if args.bwd == '1_1' or len(args.bwd) == 1:
@@ -275,6 +281,7 @@ if __name__ == "__main__":
     parser.add_argument('--wd', type=str, default='54')  # '54'|'01_54' | '01_54_54'
     parser.add_argument('--bwd', type=str, default='1_1')
     parser.add_argument('--koleo_wt', type=float, default=0.0)
+    parser.add_argument('--loss', type=str, default='ce')  # ce|ls|ceh
 
     parser.add_argument('--exp_name', type=str, default='baseline')
 

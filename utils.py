@@ -5,6 +5,84 @@ import torch.optim as optim
 import torch.nn.functional as F
 
 
+class CrossEntropyLabelSmooth(nn.Module):
+    """Cross entropy loss with label smoothing regularizer.
+    Reference:  Szegedy et al. Rethinking the Inception Architecture for Computer Vision. CVPR 2016.
+    Equation: y = (1 - epsilon) * y + epsilon / K.
+    Args:
+        num_classes (int): number of classes.
+        epsilon (float): weight.
+    """
+    def __init__(self, num_classes, epsilon=0.05, reduction=True):
+        super(CrossEntropyLabelSmooth, self).__init__()
+        self.num_classes = num_classes
+        self.epsilon = epsilon
+
+        self.reduction = reduction
+        self.logsoftmax = nn.LogSoftmax(dim=1)
+
+    def forward(self, inputs, targets):
+        """
+        Args:
+            inputs: prediction matrix (before softmax) with shape (batch_size, num_classes)
+            targets: ground truth labels with shape (batch_size)
+        """
+        log_probs = self.logsoftmax(inputs)
+        targets = torch.zeros(log_probs.size()).scatter_(
+            1,
+            targets.unsqueeze(1).cpu(), 1)
+
+        if torch.cuda.is_available(): targets = targets.cuda()
+        targets = (1 - self.epsilon) * targets + self.epsilon / self.num_classes
+        loss = (-targets * log_probs).sum(dim=1)
+        if self.reduction:
+            return loss.mean()
+        else:
+            return loss
+        return loss
+
+
+class CrossEntropyHinge(nn.Module):
+    """Cross entropy loss with label smoothing regularizer.
+    Reference:  Szegedy et al. Rethinking the Inception Architecture for Computer Vision. CVPR 2016.
+    Equation: y = (1 - epsilon) * y + epsilon / K.
+    Args:
+        num_classes (int): number of classes.
+        epsilon (float): weight.
+    """
+    def __init__(self, num_classes, epsilon=0.05, reduction=True):
+        super(CrossEntropyHinge, self).__init__()
+        self.num_classes = num_classes
+        self.epsilon = epsilon
+
+        self.reduction = reduction
+        self.logsoftmax = nn.LogSoftmax(dim=1)
+
+    def forward(self, inputs, targets):
+        """
+        Args:
+            inputs: prediction matrix (before softmax) with shape (batch_size, num_classes)
+            targets: ground truth labels with shape (batch_size)
+        """
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+        log_probs = self.logsoftmax(inputs)
+        targets = torch.zeros(log_probs.size()).scatter_(
+            1,
+            targets.unsqueeze(1).cpu(), 1)
+        targets = targets.to(device)
+
+        loss = (- targets * log_probs).sum(dim=1)
+
+        mask = loss >= -torch.log(torch.tensor(1-self.epsilon))
+        loss = loss * mask
+
+        if self.reduction:
+            return loss.mean()
+        else:
+            return loss
+        return loss
+
 
 class KoLeoLoss(nn.Module):
     """Kozachenko-Leonenko entropic loss regularizer from Sablayrolles et al. - 2018 - Spreading vectors for similarity search"""
