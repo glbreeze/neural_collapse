@@ -108,9 +108,10 @@ def set_optimizer_b1(model, args, momentum, log,):
             if 'weight' in name:
                 bn_params.append(param)
             else:
-                if (name == 'layer4.2.bn3.bias' and args.model == 'resnet50') or \
-                   (name == 'layer4.1.bn2.bias' and args.model == 'resnet18'):
+                if ('7.2.bn3.bias' in name and args.model == 'resnet50') or \
+                   ('7.1.bn2.bias' in name and args.model == 'resnet18'):
                     bnb1_params.append(param)
+                    log('----{} assigned to BNB_last (bnb1)'.format(name))
                 else:
                     bnb_params.append(param)
         elif 'classifier' in name or 'fc' in name:
