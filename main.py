@@ -182,6 +182,7 @@ def analysis(graphs, model, criterion_summed, loader, args):
 
 
 def main(args):
+    MAX_TEST_ACC, BEST_EPOCH=0.0, 0
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     # ==================== data loader ====================
     train_loader, test_loader = get_dataloader(args)
@@ -222,9 +223,9 @@ def main(args):
             analysis(graphs1, model, criterion_summed, train_loader, args)
             analysis(graphs2, model, criterion_summed, test_loader, args)
 
-            log('>>>> epoch {}, train loss:{:.4f}, acc:{:.4f}, NC1:{:.4f}, NC2-1:{:.4f}, NC2-2:{:.4f}, NC3:{:.4f}'.format(
+            log('>>>> epoch {}, train loss:{:.4f}, acc:{:.4f}, NC1:{:.4f}, NC2-1:{:.4f}, NC2-2:{:.4f}, NC2-1W:{:.4f}, NC2-2W:{:.4f}, NC3:{:.4f}'.format(
                 epoch, graphs1.loss[-1], graphs1.accuracy[-1], graphs1.Sw_invSb[-1],
-                graphs1.norm_M_CoV[-1], graphs1.cos_M[-1], graphs1.W_M_dist[-1]
+                graphs1.norm_M_CoV[-1], graphs1.cos_M[-1], graphs1.norm_W_CoV[-1], graphs1.cos_W[-1], graphs1.W_M_dist[-1]
             ))
 
             log('>>>> epoch {}, test loss:{:.4f}, acc:{:.4f}, NC1:{:.4f}, NC2-1:{:.4f}, NC2-2:{:.4f}, NC3:{:.4f}'.format(
@@ -232,28 +233,39 @@ def main(args):
                 graphs2.norm_M_CoV[-1], graphs2.cos_M[-1], graphs2.W_M_dist[-1]
                 ))
 
+            if graphs2.accuracy[-1] > MAX_TEST_ACC:
+                MAX_TEST_ACC = graphs2.accuracy[-1]
+                BEST_EPOCH = epoch
+
             # plot loss
-            plot_var(epoch_list, graphs1.loss, graphs2.loss, type='Loss',
-                     fname=os.path.join(args.output_dir, 'loss.png'))
+            if epoch % 50 == 0:
+                plot_var(epoch_list, graphs1.loss, graphs2.loss, type='Loss',
+                         fname=os.path.join(args.output_dir, 'loss.png'))
 
-            # plot Error
-            plot_var(epoch_list,
-                     [100*(1-acc) for acc in graphs1.accuracy],
-                     [100*(1-acc) for acc in graphs2.accuracy],
-                     type='Error',
-                     fname=os.path.join(args.output_dir, 'error.png'))
+                # plot Error
+                plot_var(epoch_list,
+                         [100*(1-acc) for acc in graphs1.accuracy],
+                         [100*(1-acc) for acc in graphs2.accuracy],
+                         type='Error',
+                         fname=os.path.join(args.output_dir, 'error.png'))
 
-            plot_var(epoch_list, graphs1.Sw_invSb, graphs2.Sw_invSb, type='NC1', 
-                     fname=os.path.join(args.output_dir, 'nc1.png'))
+                plot_var(epoch_list, graphs1.Sw_invSb, graphs2.Sw_invSb, type='NC1',
+                         fname=os.path.join(args.output_dir, 'nc1.png'))
 
-            plot_var(epoch_list, graphs1.norm_M_CoV, graphs2.norm_M_CoV, z=graphs1.norm_W_CoV, type='NC2-1',
-                     fname=os.path.join(args.output_dir, 'nc2_1.png'), zlabel='NC2-1 of Classifier')
+                plot_var(epoch_list, graphs1.norm_M_CoV, graphs2.norm_M_CoV, z=graphs1.norm_W_CoV, type='NC2-1',
+                         fname=os.path.join(args.output_dir, 'nc2_1.png'), zlabel='NC2-1 of Classifier')
 
-            plot_var(epoch_list, graphs1.cos_M, graphs2.cos_M, z=graphs1.cos_W, type='NC2-2',
-                     fname=os.path.join(args.output_dir, 'nc2_2.png'), zlabel='NC2-2 of Classifier')
+                plot_var(epoch_list, graphs1.cos_M, graphs2.cos_M, z=graphs1.cos_W, type='NC2-2',
+                         fname=os.path.join(args.output_dir, 'nc2_2.png'), zlabel='NC2-2 of Classifier')
 
-            plot_var(epoch_list, graphs1.W_M_dist, graphs2.W_M_dist, type='NC3', ylabel='||W^T - H||^2',
-                     fname=os.path.join(args.output_dir, 'nc3.png'))
+                plot_var(epoch_list, graphs1.W_M_dist, graphs2.W_M_dist, type='NC3', ylabel='||W^T - H||^2',
+                         fname=os.path.join(args.output_dir, 'nc3.png'))
+
+    BEST_IDX = exam_epochs.index(BEST_EPOCH)
+    log('>>>> Epoch:{}, Best Test Acc:{}, Train NC1:{}, NC2-1:{}, NC2-2:{}, NC2-1W:{}, NC2-2W:{}, NC3:{}'.format(
+        BEST_EPOCH, MAX_TEST_ACC, graphs1.Sw_invSb, graphs1.norm_M_CoV, graphs1.cos_M,
+        graphs1.norm_W_CoV, graphs1.cos_W, graphs1.W_M_dist
+    ))
 
     fname = os.path.join(args.output_dir, 'graph1.pickle')
     with open(fname, 'wb') as f:
