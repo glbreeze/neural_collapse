@@ -3,14 +3,17 @@ import torchvision.models as models
 
 
 class Detached_ResNet(nn.Module):
-    def __init__(self, pretrained=False, num_classes=10, small_kernel=True, backbone='resnet18'):
+    def __init__(self, pretrained=False, num_classes=10, small_kernel=True, backbone='resnet18', args=None):
         super(Detached_ResNet, self).__init__()
 
         # Load the pretrained ResNet model
         resnet_model = models.__dict__[backbone](pretrained=pretrained)
         if small_kernel:
             conv1_out_ch = resnet_model.conv1.out_channels
-            resnet_model.conv1 = nn.Conv2d(3, conv1_out_ch, kernel_size=3, stride=1, padding=1, bias=False) # Small dataset filter size used by He et al. (2015)
+            if args.dset in ['fmnist']:
+                resnet_model.conv1 = nn.Conv2d(1, conv1_out_ch, kernel_size=3, stride=1, padding=1, bias=False)  # Small dataset filter size used by He et al. (2015)
+            else:
+                resnet_model.conv1 = nn.Conv2d(3, conv1_out_ch, kernel_size=3, stride=1, padding=1, bias=False)  # Small dataset filter size used by He et al. (2015)
         resnet_model.maxpool = nn.MaxPool2d(kernel_size=1, stride=1, padding=0)
 
         # Isolate the feature extraction layers

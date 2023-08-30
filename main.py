@@ -201,7 +201,7 @@ def main(args):
     train_loader, test_loader = get_dataloader(args)
 
     # ====================  define model ====================
-    model = Detached_ResNet(pretrained=False, num_classes=args.C, backbone=args.model)
+    model = Detached_ResNet(pretrained=False, num_classes=args.C, backbone=args.model, args=args)
     model = model.to(device)
 
     if args.loss == 'ce':
