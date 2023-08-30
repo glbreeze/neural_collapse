@@ -278,8 +278,8 @@ def main(args):
 
     BEST_IDX = exam_epochs.index(BEST_EPOCH)
     log('>>>> Epoch:{}, Best Test Acc:{}, Train NC1:{}, NC2-1:{}, NC2-2:{}, NC2-1W:{}, NC2-2W:{}, NC3:{}'.format(
-        BEST_EPOCH, MAX_TEST_ACC, graphs1.Sw_invSb, graphs1.norm_M_CoV, graphs1.cos_M,
-        graphs1.norm_W_CoV, graphs1.cos_W, graphs1.W_M_dist
+        BEST_EPOCH, MAX_TEST_ACC, graphs1.Sw_invSb[BEST_IDX], graphs1.norm_M_CoV[BEST_IDX], graphs1.cos_M[BEST_IDX],
+        graphs1.norm_W_CoV[BEST_IDX], graphs1.cos_W[BEST_IDX], graphs1.W_M_dist[BEST_IDX]
     ))
 
     fname = os.path.join(args.output_dir, 'graph1.pickle')

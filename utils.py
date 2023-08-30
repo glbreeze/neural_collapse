@@ -74,7 +74,7 @@ class CrossEntropyHinge(nn.Module):
 
         loss = (- targets * log_probs).sum(dim=1)
 
-        mask = loss >= -torch.log(torch.tensor(1-self.epsilon))
+        mask = loss.detach() >= -torch.log(torch.tensor(1-self.epsilon))
         loss = loss * mask
 
         if self.reduction:

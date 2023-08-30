@@ -30,7 +30,7 @@ def get_dataloader(args):
             normalize
         ])
     elif args.dset == 'fmnist':
-        fashion_mnist = torchvision.datasets.FashionMNIST(download=False, train=True, root=".").train_data.float()
+        fashion_mnist = torchvision.datasets.FashionMNIST(download=True, train=True, root="data").train_data.float()
         transform = transforms.Compose([transforms.Resize((32, 32)),
                                         transforms.ToTensor(),
                                         transforms.Normalize((fashion_mnist.mean() / 255,), (fashion_mnist.std() / 255,))
