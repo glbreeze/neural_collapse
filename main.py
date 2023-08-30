@@ -52,8 +52,21 @@ def train_one_epoch(model, criterion, train_loader, optimizer, epoch, args):
 
         optimizer.zero_grad()
         loss = criterion(out, target)  # all
-        if args.koleo_wt > 0: 
-            kl_loss = koleo_loss(feat)
+        if args.koleo_wt > 0:
+            # compute global mean
+            if args.koleo_type == 'c':
+                M = torch.zeros(len(feat), args.C).to(device)
+                M[torch.arange(len(feat)), target] = 1            # [B, C]
+                M = torch.nn.functional.normalize(M, p=1, dim=0)  # [B, C]
+                cls_mean = torch.einsum('cb,bd->cd', M.T, feat)   # [C, B] * [B, D]
+                cls_in_batch = torch.unique(target)
+                cls_mean = cls_mean[cls_in_batch]
+                glb_mean = torch.mean(cls_mean, dim=0)
+
+                kl_loss = koleo_loss(feat-glb_mean.detach())
+
+            else:
+                kl_loss = koleo_loss(feat)
             loss += kl_loss * args.koleo_wt
         loss.backward()
         optimizer.step()
@@ -197,6 +210,8 @@ def main(args):
         criterion = CrossEntropyLabelSmooth(args.C, epsilon=0.05)
     elif args.loss == 'ceh':
         criterion = CrossEntropyHinge(args.C, epsilon=0.05)
+    else:
+        criterion = nn.CrossEntropyLoss()
     criterion_summed = nn.CrossEntropyLoss(reduction='sum')
 
     if args.bwd == '1_1' or len(args.bwd) == 1:
@@ -293,6 +308,7 @@ if __name__ == "__main__":
     parser.add_argument('--wd', type=str, default='54')  # '54'|'01_54' | '01_54_54'
     parser.add_argument('--bwd', type=str, default='1_1')
     parser.add_argument('--koleo_wt', type=float, default=0.0)
+    parser.add_argument('--koleo_type', type=str, default='d')  # d|c  default|center
     parser.add_argument('--loss', type=str, default='ce')  # ce|ls|ceh
 
     parser.add_argument('--exp_name', type=str, default='baseline')
