@@ -7,8 +7,9 @@ import pickle
 import argparse
 from data import get_dataloader
 from model import Detached_ResNet
-from utils import Graph_Vars, set_optimizer, set_optimizer_b, set_optimizer_b1, set_log_path, log, print_args, KoLeoLoss
-from utils import CrossEntropyLabelSmooth, CrossEntropyHinge
+from utils import Graph_Vars, set_optimizer, set_optimizer_b, set_optimizer_b1, set_log_path, log, print_args, get_scheduler
+from utils import compute_ETF, compute_W_H_relation
+from utils import CrossEntropyLabelSmooth, CrossEntropyHinge, KoLeoLoss
 
 import numpy as np
 import torch.nn as nn
@@ -190,8 +191,14 @@ def analysis(graphs, model, criterion_summed, loader, args):
         G -= torch.diag(torch.diag(G))  # [C, C]
         return torch.norm(G, 1).item() / (args.C * (args.C - 1))
 
+    nc2 = compute_ETF(W, device)
+    nc3 = compute_W_H_relation(W, M_, device)  # M_ is mean normalized
+    graphs.nc2.append(nc2)
+    graphs.nc3.append(nc3)
+
     graphs.cos_M.append(coherence(M_ / M_norms)) # [D, C]
     graphs.cos_W.append(coherence(W.T / W_norms))
+
 
 
 def main(args):
@@ -221,7 +228,7 @@ def main(args):
     elif len(args.bwd) == 5:
         optimizer = set_optimizer_b1(model, args, 0.9, log)
 
-    lr_scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=args.max_epochs//10, gamma=args.lr_decay)
+    lr_scheduler = get_scheduler(args, optimizer, n_batches=len(train_loader))
 
     graphs1 = Graph_Vars()
     graphs2 = Graph_Vars()
@@ -238,13 +245,13 @@ def main(args):
             analysis(graphs1, model, criterion_summed, train_loader, args)
             analysis(graphs2, model, criterion_summed, test_loader, args)
 
-            log('>>>> epoch {}, train loss:{:.4f}, acc:{:.4f}, NC1:{:.4f}, NC2-1:{:.4f}, NC2-2:{:.4f}, NC2-1W:{:.4f}, NC2-2W:{:.4f}, NC3:{:.4f}'.format(
-                epoch, graphs1.loss[-1], graphs1.accuracy[-1], graphs1.Sw_invSb[-1],
+            log('>>>> EP {}, train loss:{:.4f}, acc:{:.4f}, NC1:{:.4f}, NC2:{:.4f}, NC3:{:.4f}, -- NC2-1:{:.4f}, NC2-2:{:.4f}, NC2-1W:{:.4f}, NC2-2W:{:.4f}, NC3:{:.4f}'.format(
+                epoch, graphs1.loss[-1], graphs1.accuracy[-1], graphs1.Sw_invSb[-1], graphs1.nc2[-1], graphs1.nc3[-1],
                 graphs1.norm_M_CoV[-1], graphs1.cos_M[-1], graphs1.norm_W_CoV[-1], graphs1.cos_W[-1], graphs1.W_M_dist[-1]
             ))
 
-            log('>>>> epoch {}, test loss:{:.4f}, acc:{:.4f}, NC1:{:.4f}, NC2-1:{:.4f}, NC2-2:{:.4f}, NC3:{:.4f}'.format(
-                epoch, graphs2.loss[-1], graphs2.accuracy[-1], graphs2.Sw_invSb[-1],
+            log('>>>> EP {}, test loss:{:.4f}, acc:{:.4f}, NC1:{:.4f}, NC2:{:.4f}, NC3:{:.4f}, -- NC2-1:{:.4f}, NC2-2:{:.4f}, NC3:{:.4f}'.format(
+                epoch, graphs2.loss[-1], graphs2.accuracy[-1], graphs2.Sw_invSb[-1], graphs2.nc2[-1], graphs2.nc3[-1],
                 graphs2.norm_M_CoV[-1], graphs2.cos_M[-1], graphs2.W_M_dist[-1]
                 ))
 
@@ -277,9 +284,9 @@ def main(args):
                          fname=os.path.join(args.output_dir, 'nc3.png'))
 
     BEST_IDX = exam_epochs.index(BEST_EPOCH)
-    log('>>>> Epoch:{}, Best Test Acc:{}, Train NC1:{}, NC2-1:{}, NC2-2:{}, NC2-1W:{}, NC2-2W:{}, NC3:{}'.format(
-        BEST_EPOCH, MAX_TEST_ACC, graphs1.Sw_invSb[BEST_IDX], graphs1.norm_M_CoV[BEST_IDX], graphs1.cos_M[BEST_IDX],
-        graphs1.norm_W_CoV[BEST_IDX], graphs1.cos_W[BEST_IDX], graphs1.W_M_dist[BEST_IDX]
+    log('>>>> EP:{}, Best Test Acc:{}, Train NC1:{:.4f}, NC2:{:.4f}, NC3:{:.4f}, -- NC2-1:{:.4f}, NC2-2:{:.4f}, NC2-1W:{:.4f}, NC2-2W:{:.4f}, NC3:{:.4f}'.format(
+        BEST_EPOCH, MAX_TEST_ACC, graphs1.Sw_invSb[BEST_IDX], graphs1.nc2[BEST_IDX], graphs1.nc3[BEST_IDX],
+        graphs1.norm_M_CoV[BEST_IDX], graphs1.cos_M[BEST_IDX], graphs1.norm_W_CoV[BEST_IDX], graphs1.cos_W[BEST_IDX], graphs1.W_M_dist[BEST_IDX]
     ))
 
     fname = os.path.join(args.output_dir, 'graph1.pickle')
@@ -288,6 +295,16 @@ def main(args):
     fname = os.path.join(args.output_dir, 'graph2.pickle')
     with open(fname, 'wb') as f:
         pickle.dump(graphs2, f)
+
+
+def set_seed(SEED=666):
+    random.seed(SEED)
+    np.random.seed(SEED)
+    torch.manual_seed(SEED)
+    torch.cuda.manual_seed(SEED)
+    torch.cuda.manual_seed_all(SEED)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
 
 if __name__ == "__main__":
@@ -305,6 +322,8 @@ if __name__ == "__main__":
     parser.add_argument('--batch_size', type=int, default=128)
     parser.add_argument('--max_epochs', type=int, default=1000)
     parser.add_argument('--lr_decay', type=float, default=0.5)
+    parser.add_argument('--scheduler', type=str, default='ms')  # step|ms/multi_step/cosine
+
     parser.add_argument('--wd', type=str, default='54')  # '54'|'01_54' | '01_54_54'
     parser.add_argument('--bwd', type=str, default='1_1')
     parser.add_argument('--koleo_wt', type=float, default=0.0)
@@ -315,6 +334,8 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     args.output_dir = os.path.join('/scratch/lg154/sseg/neural_collapse/result/{}/{}/'.format(args.dset, args.model), args.exp_name)
+    if args.scheduler == 'ms':
+        args.scheduler = 'multi_step'
     wds = args.wd.split('_')
     if len(wds) == 1:
         args.conv_wd, args.bn_wd, args.cls_wd = [float(wd[0]) / 10 ** int(wd[1]) for wd in wds] * 3
@@ -325,13 +346,8 @@ if __name__ == "__main__":
         args.conv_wd, args.bn_wd, args.cls_wd = [float(wd[0]) / 10 ** int(wd[1]) for wd in wds]
     if args.dset == 'cifar100':
         args.C=100
-    
-    SEED = args.seed
-    torch.manual_seed(SEED)
-    torch.cuda.manual_seed(SEED)
-    np.random.seed(SEED)
-    random.seed(SEED)
-    torch.backends.cudnn.deterministic = True
+
+    set_seed(SEED = args.seed)
 
     if not os.path.exists(args.output_dir):
         os.makedirs(args.output_dir)

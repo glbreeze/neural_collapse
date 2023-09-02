@@ -5,6 +5,45 @@ import torch.optim as optim
 import torch.nn.functional as F
 
 
+def get_scheduler(args, optimizer, n_batches):
+    """
+    cosine will change learning rate every iteration, others change learning rate every epoch
+    :param batches: the number of iterations in each epochs
+    :return: scheduler
+    """
+    SCHEDULERS = {
+        'step': optim.lr_scheduler.StepLR(optimizer, step_size=args.max_epochs//10, gamma=args.lr_decay),
+        'multi_step': optim.lr_scheduler.MultiStepLR(optimizer, milestones=[200,400], gamma=0.1),
+        'cosine': optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=n_batches * args.max_epochs, eta_min=1e-5),
+         None: None
+    }
+    return SCHEDULERS[args.scheduler]
+
+
+def compute_ETF(W, device):
+    K = W.shape[0]
+    W = W - torch.mean(W, dim=0, keepdim=True)
+    WWT = torch.mm(W, W.T)
+    WWT /= torch.norm(WWT, p='fro')
+
+    sub = (torch.eye(K) - 1 / K * torch.ones((K, K))).to(device) / pow(K - 1, 0.5)
+    ETF_metric = torch.norm(WWT - sub, p='fro')
+    return ETF_metric.detach().cpu().numpy().item()
+
+
+def compute_W_H_relation(W, H, device):
+    """ H is already normalized"""
+    K = W.shape[0]
+
+    W = W - torch.mean(W, dim=0, keepdim=True)
+    WH = torch.mm(W, H.to(device))
+    WH /= torch.norm(WH, p='fro')
+    sub = 1 / pow(K - 1, 0.5) * (torch.eye(K) - 1 / K * torch.ones((K, K))).to(device)
+
+    res = torch.norm(WH - sub, p='fro')
+    return res.detach().cpu().numpy().item()
+
+
 class CrossEntropyLabelSmooth(nn.Module):
     """Cross entropy loss with label smoothing regularizer.
     Reference:  Szegedy et al. Rethinking the Inception Architecture for Computer Vision. CVPR 2016.
@@ -233,6 +272,9 @@ class Graph_Vars:
 
         # NC3
         self.W_M_dist = []
+
+        self.nc2 = []
+        self.nc3 = []
 
         # NC4
         self.NCC_mismatch = []
