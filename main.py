@@ -39,7 +39,7 @@ def plot_var(x_list, y_train, y_test, z=None, fname='fig.png', type='', title=No
     plt.savefig(fname)
 
 
-def train_one_epoch(model, criterion, train_loader, optimizer, epoch, args):
+def train_one_epoch(model, criterion, train_loader, optimizer, epoch, args, lr_scheduler=None):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.train()
 
@@ -74,13 +74,17 @@ def train_one_epoch(model, criterion, train_loader, optimizer, epoch, args):
 
         accuracy = torch.mean((torch.argmax(out, dim=1) == target).float()).item()
 
-        if batch_idx % (len(train_loader)//2) == 0:
-            log('Train\tEpoch: {} [{}/{}] Batch Loss: {:.6f} Batch Accuracy: {:.6f}'.format(
-                epoch,
-                batch_idx,
-                len(train_loader),
-                loss.item(),
-                accuracy))
+        if args.scheduler == 'cosine' and epoch<=400:
+            lr_scheduler.step()
+
+        log('Train\tEpoch: {} [{}/{}] Batch Loss: {:.6f} Batch Accuracy: {:.6f} LR: {:.6f}'.format(
+            epoch,
+            batch_idx,
+            len(train_loader),
+            loss.item(),
+            accuracy,
+            optimizer.param_groups[0]['lr']
+        ))
 
 
 def analysis(graphs, model, criterion_summed, loader, args):
@@ -236,8 +240,10 @@ def main(args):
     epoch_list = []
     for epoch in range(1, args.max_epochs + 1):
 
-        train_one_epoch(model, criterion, train_loader, optimizer, epoch, args)
-        lr_scheduler.step()
+        train_one_epoch(model, criterion, train_loader, optimizer, epoch, args, scheduler=lr_scheduler)
+
+        if args.scheduler in ['step', 'ms', 'multi_step']:
+            lr_scheduler.step()
 
         if epoch in exam_epochs:
 
