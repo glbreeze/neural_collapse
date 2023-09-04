@@ -5,17 +5,35 @@ import torch.optim as optim
 import torch.nn.functional as F
 
 
+def _get_polynomial_decay(lr, end_lr, decay_epochs, from_epoch=0, power=1.0):
+  # Note: epochs are zero indexed by pytorch
+  end_epoch = float(from_epoch + decay_epochs)
+
+  def lr_lambda(epoch):
+    if epoch < from_epoch:
+      return 1.0
+    epoch = min(epoch, end_epoch)
+    new_lr = ((lr - end_lr) * (1. - epoch / end_epoch) ** power + end_lr)
+    return new_lr / lr  # LambdaLR expects returning a factor
+
+  return lr_lambda
+
+
 def get_scheduler(args, optimizer, n_batches):
     """
     cosine will change learning rate every iteration, others change learning rate every epoch
     :param batches: the number of iterations in each epochs
     :return: scheduler
     """
+
+    lr_lambda = _get_polynomial_decay(args.lr, args.end_lr,
+                                      decay_epochs=args.decay_epochs,
+                                      from_epoch=0, power=args.power)
     SCHEDULERS = {
         'step': optim.lr_scheduler.StepLR(optimizer, step_size=args.max_epochs//10, gamma=args.lr_decay),
         'multi_step': optim.lr_scheduler.MultiStepLR(optimizer, milestones=[200,400], gamma=0.1),
-        'cosine': optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=n_batches * 400, eta_min=1e-5),
-         None: None
+        'cosine': optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=n_batches * args.decay_epochs, eta_min=args.end_lr),
+        'poly': optim.lr_scheduler.LambdaLR(optimizer, lr_lambda, last_epoch=-1)
     }
     return SCHEDULERS[args.scheduler]
 
@@ -284,6 +302,7 @@ class Graph_Vars:
         self.LNC1 = []
         self.LNC23 = []
         self.Lperp = []
+        self.lr = []
 
 
 def set_log_path(path):

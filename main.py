@@ -75,7 +75,7 @@ def train_one_epoch(model, criterion, train_loader, optimizer, epoch, args, lr_s
 
         accuracy = torch.mean((torch.argmax(out, dim=1) == target).float()).item()
 
-        if args.scheduler == 'cosine' and epoch<=400:
+        if args.scheduler == 'cosine' and epoch <= args.decay_epochs:
             lr_scheduler.step()
 
     log('Train\tEpoch: {} [{}/{}] Batch Loss: {:.6f} Batch Accuracy: {:.6f} LR: {:.6f}'.format(
@@ -242,7 +242,7 @@ def main(args):
     for epoch in range(1, args.max_epochs + 1):
         train_one_epoch(model, criterion, train_loader, optimizer, epoch, args, lr_scheduler=lr_scheduler)
 
-        if args.scheduler in ['step', 'ms', 'multi_step']:
+        if args.scheduler in ['step', 'ms', 'multi_step', 'poly']:
             lr_scheduler.step()
 
         if epoch in exam_epochs:
@@ -250,6 +250,8 @@ def main(args):
             epoch_list.append(epoch)
             analysis(graphs1, model, criterion_summed, train_loader, args)
             analysis(graphs2, model, criterion_summed, test_loader, args)
+            graphs1.lr.append(optimizer.param_groups[0]['lr'])
+            graphs2.lr.append(optimizer.param_groups[0]['lr'])
 
             log('>>>> EP {}, train loss:{:.4f}, acc:{:.4f}, NC1:{:.4f}, NC2:{:.4f}, NC3:{:.4f}, -- NC2-1:{:.4f}, NC2-2:{:.4f}, NC2-1W:{:.4f}, NC2-2W:{:.4f}, NC3:{:.4f}'.format(
                 epoch, graphs1.loss[-1], graphs1.accuracy[-1], graphs1.Sw_invSb[-1], graphs1.nc2[-1], graphs1.nc3[-1],
@@ -267,6 +269,9 @@ def main(args):
 
             # plot loss
             if epoch % 50 == 0:
+                plot_var(epoch_list, graphs1.lr, graphs2.lr, type='Learning Rate',
+                         fname=os.path.join(args.output_dir, 'lr.png'))
+
                 plot_var(epoch_list, graphs1.loss, graphs2.loss, type='Loss',
                          fname=os.path.join(args.output_dir, 'loss.png'))
 
@@ -325,6 +330,9 @@ if __name__ == "__main__":
     parser.add_argument('--C', type=int, default=10)
 
     parser.add_argument('--lr', type=float, default=0.05)
+    parser.add_argument('--end_lr', type=float, default=0.00001)  # poly LRD
+    parser.add_argument('--power', type=float, default=2.0)       # poly LRD
+    parser.add_argument('--decay_epochs', type=int, default=400)
     parser.add_argument('--batch_size', type=int, default=128)
     parser.add_argument('--max_epochs', type=int, default=1000)
     parser.add_argument('--lr_decay', type=float, default=0.5)
