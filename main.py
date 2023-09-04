@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import pdb
 import os
 import pdb
 import torch
@@ -77,14 +78,14 @@ def train_one_epoch(model, criterion, train_loader, optimizer, epoch, args, lr_s
         if args.scheduler == 'cosine' and epoch<=400:
             lr_scheduler.step()
 
-        log('Train\tEpoch: {} [{}/{}] Batch Loss: {:.6f} Batch Accuracy: {:.6f} LR: {:.6f}'.format(
-            epoch,
-            batch_idx,
-            len(train_loader),
-            loss.item(),
-            accuracy,
-            optimizer.param_groups[0]['lr']
-        ))
+    log('Train\tEpoch: {} [{}/{}] Batch Loss: {:.6f} Batch Accuracy: {:.6f} LR: {:.6f}'.format(
+        epoch,
+        batch_idx,
+        len(train_loader),
+        loss.item(),
+        accuracy,
+        optimizer.param_groups[0]['lr']
+    ))
 
 
 def analysis(graphs, model, criterion_summed, loader, args):
@@ -239,8 +240,7 @@ def main(args):
 
     epoch_list = []
     for epoch in range(1, args.max_epochs + 1):
-
-        train_one_epoch(model, criterion, train_loader, optimizer, epoch, args, scheduler=lr_scheduler)
+        train_one_epoch(model, criterion, train_loader, optimizer, epoch, args, lr_scheduler=lr_scheduler)
 
         if args.scheduler in ['step', 'ms', 'multi_step']:
             lr_scheduler.step()
@@ -339,7 +339,7 @@ if __name__ == "__main__":
     parser.add_argument('--exp_name', type=str, default='baseline')
 
     args = parser.parse_args()
-    args.output_dir = os.path.join('/scratch/lg154/sseg/neural_collapse/result/{}/{}/'.format(args.dset, args.model), args.exp_name)
+    args.output_dir = os.path.join('/scratch/lg154/sseg/neural_collapse/result_09/{}/{}/'.format(args.dset, args.model), args.exp_name)
     if args.scheduler == 'ms':
         args.scheduler = 'multi_step'
     wds = args.wd.split('_')

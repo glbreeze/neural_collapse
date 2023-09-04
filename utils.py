@@ -14,7 +14,7 @@ def get_scheduler(args, optimizer, n_batches):
     SCHEDULERS = {
         'step': optim.lr_scheduler.StepLR(optimizer, step_size=args.max_epochs//10, gamma=args.lr_decay),
         'multi_step': optim.lr_scheduler.MultiStepLR(optimizer, milestones=[200,400], gamma=0.1),
-        'cosine': optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=n_batches * args.max_epochs, eta_min=1e-5),
+        'cosine': optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=n_batches * 400, eta_min=1e-5),
          None: None
     }
     return SCHEDULERS[args.scheduler]

@@ -20,5 +20,5 @@ singularity exec --nv \
 --overlay ${ext3_path}:ro \
 ${sif_path} /bin/bash -c "
 source /ext3/env.sh
-python main.py --dset fmnist --model resnet18 --koleo_wt 0.00 --loss ce --exp_name wd54
+python main.py --dset fmnist --model resnet18 --koleo_wt 0.01 --loss ce --koleo_type c --exp_name wd54_klc01
 "
