@@ -361,6 +361,8 @@ if __name__ == "__main__":
         args.conv_wd, args.bn_wd, args.cls_wd = [float(wd[0]) / 10 ** int(wd[1]) for wd in wds]
     if args.dset == 'cifar100':
         args.C=100
+    elif args.dset == 'tinyi':
+        args.C=200
 
     set_seed(SEED = args.seed)
 
