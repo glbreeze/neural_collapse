@@ -219,7 +219,7 @@ def main(args):
     if args.loss == 'ce':
         criterion = nn.CrossEntropyLoss()
     elif args.loss == 'ls':
-        criterion = CrossEntropyLabelSmooth(args.C, epsilon=0.05)
+        criterion = CrossEntropyLabelSmooth(args.C, epsilon=args.eps)
     elif args.loss == 'ceh':
         criterion = CrossEntropyHinge(args.C, epsilon=0.05)
     else:
@@ -343,6 +343,7 @@ if __name__ == "__main__":
     parser.add_argument('--koleo_wt', type=float, default=0.0)
     parser.add_argument('--koleo_type', type=str, default='d')  # d|c  default|center
     parser.add_argument('--loss', type=str, default='ce')  # ce|ls|ceh
+    parser.add_argument('--eps', type=float, default=0.05)  # ce|ls|ceh
 
     parser.add_argument('--exp_name', type=str, default='baseline')
 
