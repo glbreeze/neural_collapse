@@ -3,5 +3,7 @@
 *.out
 *.log
 result/
+result_08/
+result_09/
 data/
 __pycache__/
