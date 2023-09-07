@@ -323,6 +323,7 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=2021, help="random seed")
     parser.add_argument('--dset', type=str, default='cifar10')
     parser.add_argument('--model', type=str, default='resnet18')
+    parser.add_argument('--ETF_fc', action='store_true', default=False)
 
     # dataset parameters of CIFAR10
     parser.add_argument('--im_size', type=int, default=32)

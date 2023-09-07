@@ -1,3 +1,4 @@
+import torch
 import torch.nn as nn
 import torchvision.models as models
 
@@ -21,6 +22,14 @@ class Detached_ResNet(nn.Module):
 
         # Isolate the classifier layer
         self.classifier = nn.Linear(resnet_model.fc.in_features, num_classes)
+
+        if args.ETF_fc:
+            weight = torch.sqrt(torch.tensor(num_classes / (num_classes - 1))) * (
+                    torch.eye(num_classes) - (1 / num_classes) * torch.ones((num_classes, num_classes)))
+            weight /= torch.sqrt((1 / num_classes * torch.norm(weight, 'fro') ** 2))
+
+            self.classifier.weight = nn.Parameter(torch.mm(weight, torch.eye(num_classes, resnet_model.fc.in_features)))
+            self.classifier.weight.requires_grad_(False)
 
     def forward(self, x, ret_feat=False):
         x = self.features(x)
