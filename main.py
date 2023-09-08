@@ -222,6 +222,8 @@ def main(args):
         criterion = CrossEntropyLabelSmooth(args.C, epsilon=args.eps)
     elif args.loss == 'ceh':
         criterion = CrossEntropyHinge(args.C, epsilon=0.05)
+    elif args.loss == 'hinge':
+        criterion = nn.MultiMarginLoss(p=1, margin=args.margin, reduction="mean")
     else:
         criterion = nn.CrossEntropyLoss()
     criterion_summed = nn.CrossEntropyLoss(reduction='sum')
@@ -343,8 +345,9 @@ if __name__ == "__main__":
     parser.add_argument('--bwd', type=str, default='1_1')
     parser.add_argument('--koleo_wt', type=float, default=0.0)
     parser.add_argument('--koleo_type', type=str, default='d')  # d|c  default|center
-    parser.add_argument('--loss', type=str, default='ce')  # ce|ls|ceh
-    parser.add_argument('--eps', type=float, default=0.05)  # ce|ls|ceh
+    parser.add_argument('--loss', type=str, default='ce')  # ce|ls|ceh|hinge
+    parser.add_argument('--eps', type=float, default=0.05)  # for ls loss
+    parser.add_argument('--margin', type=float, default=1.0)  # for ls loss
 
     parser.add_argument('--exp_name', type=str, default='baseline')
 
