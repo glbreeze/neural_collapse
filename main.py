@@ -1,12 +1,10 @@
 # -*- coding: utf-8 -*-
-import pdb
 import os
-import pdb
 import torch
 import random
 import pickle
 import argparse
-from data import get_dataloader
+from dataset.data import get_dataloader
 from model import Detached_ResNet
 from utils import Graph_Vars, set_optimizer, set_optimizer_b, set_optimizer_b1, set_log_path, log, print_args, get_scheduler
 from utils import compute_ETF, compute_W_H_relation
@@ -14,7 +12,6 @@ from utils import CrossEntropyLabelSmooth, CrossEntropyHinge, KoLeoLoss
 
 import numpy as np
 import torch.nn as nn
-import torch.optim as optim
 import matplotlib.pyplot as plt
 from scipy.sparse.linalg import svds
 
@@ -326,6 +323,7 @@ if __name__ == "__main__":
     parser.add_argument('--dset', type=str, default='cifar10')
     parser.add_argument('--model', type=str, default='resnet18')
     parser.add_argument('--ETF_fc', action='store_true', default=False)
+    parser.add_argument('--test_ood', action='store_true', default=False)
 
     # dataset parameters of CIFAR10
     parser.add_argument('--im_size', type=int, default=32)
