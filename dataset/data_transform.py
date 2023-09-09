@@ -25,7 +25,7 @@ class GaussianBlur(object):
 
 def get_moco_base_augmentation(min_scale=0.2, normalize=None, size=32):
     normalize = normalize if normalize is not None else transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-    return [
+    return transforms.Compose([
         transforms.RandomResizedCrop(size, scale=(min_scale, 1.0)),
         transforms.RandomApply([transforms.ColorJitter(0.4, 0.4, 0.4, 0.1)], p=0.8), # not strengthened
         transforms.RandomGrayscale(p=0.2),
@@ -33,4 +33,4 @@ def get_moco_base_augmentation(min_scale=0.2, normalize=None, size=32):
         transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
         normalize
-    ]
+    ])
