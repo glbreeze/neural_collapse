@@ -186,6 +186,11 @@ def analysis(graphs, model, criterion_summed, loader, args):
     normalized_W = W.T / torch.norm(W.T, 'fro')
     graphs.W_M_dist.append((torch.norm(normalized_W - normalized_M) ** 2).item())
 
+    normalized_M = M_  / torch.norm(M_,  dim=0)    # [512, C]/[C]
+    normalized_W = W.T / torch.norm(W.T, dim=0)    # [512, C]/[C]
+    l2_dist = torch.norm(normalized_M - normalized_W, dim=0)  # [C]
+    nc3 = torch.mean(l2_dist)
+
     # mutual coherence
     def coherence(V):
         G = V.T @ V  # [C, D] [D, C]
@@ -193,8 +198,9 @@ def analysis(graphs, model, criterion_summed, loader, args):
         G -= torch.diag(torch.diag(G))  # [C, C]
         return torch.norm(G, 1).item() / (args.C * (args.C - 1))
 
-    nc2 = compute_ETF(W, device)
-    nc3 = compute_W_H_relation(W, M_, device)  # M_ is mean normalized
+    nc2 = compute_ETF(W, device)  # from all loss equal paper
+    # nc3 = compute_W_H_relation(W, M_, device)  # M_ is mean normalized
+
     graphs.nc2.append(nc2)
     graphs.nc3.append(nc3)
 
@@ -265,6 +271,8 @@ def main(args):
             if graphs2.accuracy[-1] > MAX_TEST_ACC:
                 MAX_TEST_ACC = graphs2.accuracy[-1]
                 BEST_EPOCH = epoch
+                BEST_NET = model.state_dict()
+                torch.save(BEST_NET, os.path.join(args.output_dir, "best_net.pt"))
 
             # plot loss
             if epoch % 50 == 0:
