@@ -358,7 +358,7 @@ if __name__ == "__main__":
     parser.add_argument('--exp_name', type=str, default='baseline')
 
     args = parser.parse_args()
-    args.output_dir = os.path.join('/scratch/lg154/sseg/neural_collapse/result_09/{}/{}/'.format(args.dset, args.model), args.exp_name)
+    args.output_dir = os.path.join('/scratch/lg154/sseg/neural_collapse/result/{}/{}/'.format(args.dset, args.model), args.exp_name)
     if args.scheduler == 'ms':
         args.scheduler = 'multi_step'
     wds = args.wd.split('_')
