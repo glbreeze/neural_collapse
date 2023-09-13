@@ -31,6 +31,14 @@ class Detached_ResNet(nn.Module):
             self.classifier.weight = nn.Parameter(torch.mm(weight, torch.eye(num_classes, resnet_model.fc.in_features)))
             self.classifier.weight.requires_grad_(False)
 
+        if args.ckpt not in ['', 'null', 'none']:
+            pretrain_wt = torch.load(args.ckpt)
+            if args.load_fc:  # load both feature extractor and fc
+                pass
+            else:             # not load fc
+                pretrain_wt = {k: v for k, v in pretrain_wt.items() if 'classifier' not in k}
+            self.load_state_dict(pretrain_wt)
+
     def forward(self, x, ret_feat=False):
         x = self.features(x)
         x = x.view(x.size(0), -1)

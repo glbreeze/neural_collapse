@@ -238,6 +238,12 @@ def main(args):
     elif len(args.bwd) == 5:
         optimizer = set_optimizer_b1(model, args, 0.9, log)
 
+    if args.ckpt not in ['', 'null', 'none']:
+        optimizer = torch.optim.SGD(model.classifier.parameters(),
+                                    weight_decay=args.cls_wd,
+                                    lr=args.lr,
+                                    momentum=0.9)
+
     lr_scheduler = get_scheduler(args, optimizer, n_batches=len(train_loader))
 
     graphs1 = Graph_Vars()
@@ -332,6 +338,8 @@ if __name__ == "__main__":
     parser.add_argument('--model', type=str, default='resnet18')
     parser.add_argument('--ETF_fc', action='store_true', default=False)
     parser.add_argument('--test_ood', action='store_true', default=False)
+    parser.add_argument('--ckpt', type=str, default='')   # exp_name: wd54_ls
+    parser.add_argument('--load_fc', action='store_true', default=False)
 
     # dataset parameters of CIFAR10
     parser.add_argument('--im_size', type=int, default=32)
@@ -373,6 +381,8 @@ if __name__ == "__main__":
         args.C=100
     elif args.dset == 'tinyi':
         args.C=200
+    if args.ckpt not in ['', 'none', 'null']:
+        args.ckpt = os.path.join('result', args.dset, args.model, args.ckpt, 'best_net.pt')
 
     set_seed(SEED = args.seed)
 
