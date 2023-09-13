@@ -243,6 +243,8 @@ def main(args):
                                     weight_decay=args.cls_wd,
                                     lr=args.lr,
                                     momentum=0.9)
+        for param in model.features.parameters():
+            param.requires_grad = False
 
     lr_scheduler = get_scheduler(args, optimizer, n_batches=len(train_loader))
 

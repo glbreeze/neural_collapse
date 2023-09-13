@@ -37,7 +37,7 @@ class Detached_ResNet(nn.Module):
                 pass
             else:             # not load fc
                 pretrain_wt = {k: v for k, v in pretrain_wt.items() if 'classifier' not in k}
-            self.load_state_dict(pretrain_wt)
+            self.load_state_dict(pretrain_wt, strict=False)
 
     def forward(self, x, ret_feat=False):
         x = self.features(x)
