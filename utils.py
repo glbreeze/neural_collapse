@@ -278,6 +278,7 @@ class Graph_Vars:
         self.accuracy = []
         self.loss = []
         self.reg_loss = []
+        self.error = []
 
         # NC1
         self.Sw_invSb = []

@@ -23,7 +23,7 @@ def get_dataloader(args):
             transforms.ToTensor(),
             normalize
         ])
-        test_tranform = get_moco_base_augmentation(normalize=normalize, size=32) if args.test_ood else transform
+        test_tranform = get_moco_base_augmentation(min_scale=args.min_scale, normalize=normalize, size=32) if args.test_ood else transform
         train_loader = torch.utils.data.DataLoader(
             datasets.CIFAR10('data', train=True, download=True, transform=transform),
             batch_size=args.batch_size, shuffle=True)
@@ -39,7 +39,7 @@ def get_dataloader(args):
             transforms.ToTensor(),
             normalize
         ])
-        test_tranform = get_moco_base_augmentation(normalize=normalize, size=96) if args.test_ood else transform
+        test_tranform = get_moco_base_augmentation(min_scale=args.min_scale, normalize=normalize, size=96) if args.test_ood else transform
         train_loader = torch.utils.data.DataLoader(
             datasets.STL10('data', split='train', download=True, transform=transform),
             batch_size=args.batch_size, shuffle=True)
@@ -53,7 +53,7 @@ def get_dataloader(args):
             transforms.ToTensor(),
             normalize
         ])
-        test_tranform = get_moco_base_augmentation(normalize=normalize, size=32) if args.test_ood else transform
+        test_tranform = get_moco_base_augmentation(min_scale=args.min_scale, normalize=normalize, size=32) if args.test_ood else transform
         train_loader = torch.utils.data.DataLoader(
             datasets.CIFAR100('data', train=True, download=True, transform=transform),
             batch_size=args.batch_size, shuffle=True)
@@ -81,7 +81,7 @@ def get_dataloader(args):
         transform = transforms.Compose([transforms.ToTensor(),
                                         normalize,
                                         ])
-        test_tranform = get_moco_base_augmentation(normalize=normalize, size=64) if args.test_ood else transform
+        test_tranform = get_moco_base_augmentation(min_scale=args.min_scale, normalize=normalize, size=64) if args.test_ood else transform
         train_dataset = datasets.ImageFolder(os.path.join(data_folder, 'tiny-imagenet-200', 'train'), transform)
         train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
 

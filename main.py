@@ -340,6 +340,7 @@ if __name__ == "__main__":
     parser.add_argument('--model', type=str, default='resnet18')
     parser.add_argument('--ETF_fc', action='store_true', default=False)
     parser.add_argument('--test_ood', action='store_true', default=False)
+    parser.add_argument('--min_scale', type=float, default=0.2)  # scale for MoCo Aug
     parser.add_argument('--ckpt', type=str, default='')   # exp_name: wd54_ls
     parser.add_argument('--load_fc', action='store_true', default=False)
 
