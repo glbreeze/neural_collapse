@@ -38,23 +38,23 @@ def get_scheduler(args, optimizer, n_batches):
     return SCHEDULERS[args.scheduler]
 
 
-def compute_ETF(W, device):
+def compute_ETF(W, device):  # W [K, 512]
     K = W.shape[0]
-    W = W - torch.mean(W, dim=0, keepdim=True)
-    WWT = torch.mm(W, W.T)
-    WWT /= torch.norm(WWT, p='fro')
+    # W = W - torch.mean(W, dim=0, keepdim=True)
+    WWT = torch.mm(W, W.T)            # [K, 512] [512, K] -> [K, K]
+    WWT /= torch.norm(WWT, p='fro')   # [K, K]
 
     sub = (torch.eye(K) - 1 / K * torch.ones((K, K))).to(device) / pow(K - 1, 0.5)
     ETF_metric = torch.norm(WWT - sub, p='fro')
     return ETF_metric.detach().cpu().numpy().item()
 
 
-def compute_W_H_relation(W, H, device):
+def compute_W_H_relation(W, H, device):  # W:[K, 512] H:[512, K]
     """ H is already normalized"""
     K = W.shape[0]
 
-    W = W - torch.mean(W, dim=0, keepdim=True)
-    WH = torch.mm(W, H.to(device))
+    # W = W - torch.mean(W, dim=0, keepdim=True)
+    WH = torch.mm(W, H.to(device))   # [K, 512] [512, K]
     WH /= torch.norm(WH, p='fro')
     sub = 1 / pow(K - 1, 0.5) * (torch.eye(K) - 1 / K * torch.ones((K, K))).to(device)
 
@@ -275,35 +275,35 @@ def set_optimizer_b1(model, args, momentum, log,):
 
 class Graph_Vars:
     def __init__(self):
-        self.accuracy = []
+        self.epoch = []
+        self.acc = []
         self.loss = []
-        self.reg_loss = []
-        self.error = []
+        self.ncc_mismatch = []
 
-        # NC1
-        self.Sw_invSb = []
+        self.nc1 = []
 
-        # NC2
-        self.norm_M_CoV = []
-        self.norm_W_CoV = []
-        self.cos_M = []
-        self.cos_W = []
+        self.nc2_norm_h = []
+        self.nc2_norm_w = []
+        self.nc2_cos_h = []
+        self.nc2_cos_w = []
+        self.nc2_h = []
+        self.nc2_w =[]
 
-        # NC3
-        self.W_M_dist = []
-
-        self.nc2 = []
         self.nc3 = []
+        self.nc3_1 = []
+        self.nc3_2 = []
 
-        # NC4
-        self.NCC_mismatch = []
-
-        # Decomposition
-        self.MSE_wd_features = []
-        self.LNC1 = []
-        self.LNC23 = []
-        self.Lperp = []
         self.lr = []
+
+    def load_dt(self, nc_dt, epoch, lr=None):
+        self.epoch.append(epoch)
+        if lr:
+            self.lr.append(lr)
+        for key in nc_dt:
+            try:
+                self.__getattribute__(key).append(nc_dt[key])
+            except:
+                print('{} is not attribute of Graph var'.format(key))
 
 
 def set_log_path(path):
