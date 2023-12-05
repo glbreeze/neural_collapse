@@ -31,7 +31,7 @@ def get_scheduler(args, optimizer, n_batches):
                                       from_epoch=0, power=args.power)
     SCHEDULERS = {
         'step': optim.lr_scheduler.StepLR(optimizer, step_size=args.max_epochs//10, gamma=args.lr_decay),
-        'multi_step': optim.lr_scheduler.MultiStepLR(optimizer, milestones=[200,400], gamma=0.1),
+        'multi_step': optim.lr_scheduler.MultiStepLR(optimizer, milestones=[150,350], gamma=0.1),
         'cosine': optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=n_batches * args.decay_epochs, eta_min=args.end_lr),
         'poly': optim.lr_scheduler.LambdaLR(optimizer, lr_lambda, last_epoch=-1)
     }

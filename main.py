@@ -113,7 +113,7 @@ def analysis(model, criterion_summed, loader, args):
                 mean[c] += torch.sum(h_c, dim=0)  #  CHW
                 N[c] += h_c.shape[0]
     M = torch.stack(mean).T               # [512, K]
-    M = M / torch.tensor(N).unsqueeze(0)  # [512, K]
+    M = M / torch.tensor(N, device=device).unsqueeze(0)  # [512, K]
     loss /= sum(N)
 
     for batch_idx, (data, target) in enumerate(loader, start=1):
@@ -264,13 +264,13 @@ def main(args):
             graphs1.load_dt(nc_train, epoch=epoch, lr=optimizer.param_groups[0]['lr'])
             graphs2.load_dt(nc_val,   epoch=epoch, lr=optimizer.param_groups[0]['lr'])
 
-            log('>>>>EP{}, train loss:{:.4f}, acc:{:.4f}, NC1:{:.4f}, NC2h{:.4f}, NC2w:{:.4f}, NC3:{:.4f}-- '
-                'NC2-1:{:.4f}, NC2-2:{:.4f}, NC2-1W:{:.4f}, NC2-2W:{:.4f}, NC3:{:.4f}, NC3_1:{:.4f}'.format(
+            log('>>>>EP{}, train loss:{:.4f}, acc:{:.4f}, NC1:{:.4f}, NC2h:{:.4f}, NC2w:{:.4f}, NC3:{:.4f}-- '
+                'NC2-1:{:.4f}, NC2-2:{:.4f}, NC2-1W:{:.4f}, NC2-2W:{:.4f}, NC3:{:.4f}, NC3_2:{:.4f}'.format(
                 epoch, graphs1.loss[-1], graphs1.acc[-1], graphs1.nc1[-1], graphs1.nc2_h[-1], graphs1.nc2_w[-1], graphs1.nc3_1[-1],
-                graphs1.nc2_norm_h[-1], graphs1.nc2_cos_h[-1], graphs1.nc2_norm_w[-1], graphs1.nc2_cos_w[-1], graphs1.nc3[-1], graphs1.nc3_2
+                graphs1.nc2_norm_h[-1], graphs1.nc2_cos_h[-1], graphs1.nc2_norm_w[-1], graphs1.nc2_cos_w[-1], graphs1.nc3[-1], graphs1.nc3_2[-1]
             ))
 
-            log('>>>>EP{}, test loss:{:.4f}, acc:{:.4f}, NC1:{:.4f}, NC2h{:.4f}, NC2w:{:.4f}, NC3:{:.4f}-- '
+            log('>>>>EP{}, test loss:{:.4f}, acc:{:.4f}, NC1:{:.4f}, NC2h:{:.4f}, NC2w:{:.4f}, NC3:{:.4f}-- '
                 'NC2-1:{:.4f}, NC2-2:{:.4f}, NC3:{:.4f}'.format(
                 epoch, graphs2.loss[-1], graphs2.acc[-1], graphs2.nc1[-1], graphs2.nc2_h[-1], graphs2.nc2_w[-1], graphs2.nc3_1[-1],
                 graphs2.nc2_norm_h[-1], graphs2.nc2_cos_h[-1], graphs2.nc3[-1]
