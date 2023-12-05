@@ -85,6 +85,7 @@ def train_one_epoch(model, criterion, train_loader, optimizer, epoch, args, lr_s
     ))
 
 
+
 def analysis(model, criterion_summed, loader, args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.eval()
@@ -97,54 +98,58 @@ def analysis(model, criterion_summed, loader, args):
     n_correct = 0
     n_match = 0
 
-    for batch_idx, (data, target) in enumerate(loader, start=1):
+    for computation in ['Mean', 'Cov']:
+        for batch_idx, (data, target) in enumerate(loader, start=1):
 
-        data, target = data.to(device), target.to(device)
-        with torch.no_grad():
-            output, h = model(data, ret_feat=True)  # [B, C], [B, 512]
+            data, target = data.to(device), target.to(device)
 
-        loss += criterion_summed(output, target).item()
+            with torch.no_grad():
+                output, h = model(data, ret_feat=True)  # [B, C], [B, 512]
 
-        for c in range(args.C):
-            idxs = torch.where(target == c)[0]
 
-            if len(idxs) > 0:  # If no class-c in this batch
+            for c in range(args.C):
+                idxs = (target == c).nonzero(as_tuple=True)[0]
+                if len(idxs) == 0:  # If no class-c in this batch
+                    continue
+
                 h_c = h[idxs, :]  # [B, 512]
-                mean[c] += torch.sum(h_c, dim=0)  #  CHW
-                N[c] += h_c.shape[0]
-    M = torch.stack(mean).T               # [512, K]
-    M = M / torch.tensor(N, device=device).unsqueeze(0)  # [512, K]
-    loss /= sum(N)
 
-    for batch_idx, (data, target) in enumerate(loader, start=1):
-        data, target = data.to(device), target.to(device)
-        with torch.no_grad():
-            output, h = model(data, ret_feat=True)  # [B, C], [B, 512]
+                if computation == 'Mean':
+                    # update class means
+                    mean[c] += torch.sum(h_c, dim=0)  #  CHW
+                    N[c] += h_c.shape[0]
 
-        for c in range(args.C):
-            idxs = torch.where(target == c)[0]
-            if len(idxs) > 0:  # If no class-c in this batch
-                h_c = h[idxs, :]  # [B, 512]
-                # update within-class cov
-                z = h_c - mean[c].unsqueeze(0)  # [B, 512]
-                cov = torch.matmul(z.unsqueeze(-1), z.unsqueeze(1))  # [B 512 1] [B 1 512] -> [B, 512, 512]
-                Sw += torch.sum(cov, dim=0)  # [512, 512]
+                elif computation == 'Cov':
+                    # update within-class cov
+                    z = h_c - mean[c].unsqueeze(0)  # [B, 512]
+                    cov = torch.matmul(z.unsqueeze(-1), z.unsqueeze(1))   # [B 512 1] [B 1 512] -> [B, 512, 512]
+                    Sw += torch.sum(cov, dim=0)  # [512, 512]
 
-        # during calculation of within-class covariance, calculate:
-        # 1) network's accuracy
-        net_pred = torch.argmax(output, dim=1)
-        n_correct += torch.sum(net_pred == target).item()
+            # during calculation of class cov, calculate loss
+            if computation == 'Cov':
+                loss += criterion_summed(output, target).item()
 
-        # 2) agreement between prediction and nearest class center
-        hm_dist = torch.cdist(h, M.T, p=2)  # [B, 512], [K, 512] -> [B, K]
-        NCC_pred = torch.argmin(hm_dist, dim=-1)
-        n_match += torch.sum(NCC_pred == net_pred).item()
-    Sw /= sum(N)
-    acc = n_correct / sum(N)
-    ncc_mismatch = 1 - n_match / sum(N)
+                # 1) network's accuracy
+                net_pred = torch.argmax(output, dim=1)
+                n_correct += sum(net_pred == target).item()
+
+                # 2) agreement between prediction and nearest class center
+                hm_dist = torch.cdist(h, M.T, p=2)  # [B, 512], [K, 512] -> [B, K]
+                NCC_pred = torch.argmin(hm_dist, dim=-1)
+                n_match += torch.sum(NCC_pred == net_pred).item()
+
+        if computation == 'Mean':
+            for c in range(args.C):
+                mean[c] /= N[c]
+                M = torch.stack(mean).T
+        elif computation == 'Cov':
+            loss /= sum(N)
+            Sw /= sum(N)
+            acc = n_correct/sum(N)
+            ncc_mismatch = 1 - n_match / sum(N)
 
     # global mean
-    muG = torch.mean(M, dim=1, keepdim=True)  # [512, C] -> [512, 1]
+    muG = torch.mean(M, dim=1, keepdim=True)  # [512, C]
 
     # between-class covariance
     M_ = M - muG  # [512, C]
@@ -157,40 +162,40 @@ def analysis(model, criterion_summed, loader, args):
     inv_Sb = eigvec @ np.diag(eigval ** (-1)) @ eigvec.T
     Sw_invSb = np.trace(Sw @ inv_Sb)
 
-    # ============== NC2: norm and cos ==============
-    W = model.classifier.weight.T    # [512, C]
+    # ========== NC2.1 and NC2.2
+    W = model.classifier.weight.T  # [512, C]
     M_norms = torch.norm(M_, dim=0)  # [C]
-    W_norms = torch.norm(W,  dim=0)  # [C]
+    W_norms = torch.norm(W , dim=0)  # [C]
 
     norm_M_CoV = (torch.std(M_norms) / torch.mean(M_norms)).item()
     norm_W_CoV = (torch.std(W_norms) / torch.mean(W_norms)).item()
 
+    # mutual coherence
     def coherence(V):
         G = V.T @ V  # [C, D] [D, C]
         G += torch.ones((args.C, args.C), device=device) / (args.C - 1)
         G -= torch.diag(torch.diag(G))  # [C, C]
         return torch.norm(G, 1).item() / (args.C * (args.C - 1))
 
-    cos_M = coherence(M_ / M_norms)  # [512, C]
-    cos_W = coherence(W  / W_norms)  # [512, C]
+    cos_M = coherence(M_ / M_norms)  # [D, C]
+    cos_W = coherence(W  / W_norms)
 
-    nc2_h = compute_ETF(M_.T, device)  # from all loss equal paper
-    nc2_w = compute_ETF(W.T,  device)  # from all loss equal paper
-
-    # ============= NC3: ||W - M_|| as in original paper
+    # =========== NC3  ||W^T - M_||
     normalized_M = M_ / torch.norm(M_, 'fro')
-    normalized_W = W  / torch.norm(W,  'fro')
-    W_M_dist = (torch.norm(normalized_W - normalized_M) ** 2).item()    # maybe no need for power of 2
+    normalized_W = W  / torch.norm(W, 'fro')
+    W_M_dist = (torch.norm(normalized_W - normalized_M) ** 2).item()
 
-    # ============== NC3: version 1 (All loss are equal paper)
-    nc3_1 = compute_W_H_relation(W.T, M_, device)  # M_ is mean normalized
+    # =========== NC2
+    nc2_h = compute_ETF(M_.T, device)
+    nc2_w = compute_ETF(W.T, device)
 
-    # ============== NC3: version 2 (my defination)
-    normalized_M = M_/ torch.norm(M_, dim=0)    # [512, C]/[C]
-    normalized_W = W / torch.norm(W , dim=0)    # [512, C]/[C]
+    # =========== NC3 (all losses are equal paper)
+    nc3_1 = compute_W_H_relation(W.T, M_, device)
+
+    normalized_M = M_  / torch.norm(M_,  dim=0)    # [512, C]/[C]
+    normalized_W = W.T / torch.norm(W.T, dim=0)    # [512, C]/[C]
     l2_dist = torch.norm(normalized_M - normalized_W, dim=0)  # [C]
     nc3_2 = torch.mean(l2_dist)
-
 
     return {
         'loss': loss,
