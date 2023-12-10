@@ -289,6 +289,9 @@ class Graph_Vars:
         self.nc2_h = []
         self.nc2_w =[]
 
+        self.norm_h = []
+        self.norm_w = []
+
         self.nc3 = []
         self.nc3_1 = []
         self.nc3_2 = []

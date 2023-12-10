@@ -169,6 +169,8 @@ def analysis(model, criterion_summed, loader, args):
 
     norm_M_CoV = (torch.std(M_norms) / torch.mean(M_norms)).item()
     norm_W_CoV = (torch.std(W_norms) / torch.mean(W_norms)).item()
+    norm_M = torch.mean(M_norms).item()
+    norm_W = torch.mean(W_norms).item()
 
     # mutual coherence
     def coherence(V):
@@ -204,6 +206,8 @@ def analysis(model, criterion_summed, loader, args):
         'nc1': Sw_invSb,
         'nc2_norm_h': norm_M_CoV,
         'nc2_norm_w': norm_W_CoV,
+        'norm_h': norm_M,
+        'norm_w': norm_W,
         'nc2_cos_h': cos_M,
         'nc2_cos_w': cos_W,
         'nc2_h': nc2_h,
@@ -288,7 +292,7 @@ def main(args):
                 torch.save(BEST_NET, os.path.join(args.output_dir, "best_net.pt"))
 
             # plot loss
-            if epoch in [args.max_epochs//2, args.max_epochs] == 0:
+            if epoch == int(args.max_epochs//2) or epoch == args.max_epochs:
                 plot_var(graphs1.epoch, graphs1.lr, graphs2.lr, type='Learning Rate',
                          fname=os.path.join(args.output_dir, 'lr.png'))
 
