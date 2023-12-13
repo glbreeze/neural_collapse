@@ -1,14 +1,24 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torchvision.models as models
 
 
-class Detached_ResNet(nn.Module):
+class GroupNorm32(torch.nn.GroupNorm):
+    def __init__(self, num_channels, num_groups=32, **kargs):
+        super().__init__(num_groups, num_channels, **kargs)
+
+
+class ResNet(nn.Module):
     def __init__(self, pretrained=False, num_classes=10, small_kernel=True, backbone='resnet18', args=None):
-        super(Detached_ResNet, self).__init__()
+        super(ResNet, self).__init__()
 
         # Load the pretrained ResNet model
-        resnet_model = models.__dict__[backbone](pretrained=pretrained)
+        if args.norm_type == 'bn':
+            resnet_model = models.__dict__[backbone](pretrained=pretrained)
+        else:
+            resnet_model = models.__dict__[backbone](pretrained=pretrained, norm_layer=GroupNorm32)
+
         if small_kernel:
             conv1_out_ch = resnet_model.conv1.out_channels
             if args.dset in ['fmnist']:
@@ -48,3 +58,27 @@ class Detached_ResNet(nn.Module):
             return out, x
         else:
             return out
+
+
+class MLP(nn.Module):
+    def __init__(self, hidden, depth=6, fc_bias=True, num_classes=10):
+        # Depth means how many layers before final linear layer
+
+        super(MLP, self).__init__()
+        layers = [nn.Linear(3072, hidden), nn.BatchNorm1d(num_features=hidden), nn.ReLU()]
+        for i in range(depth - 1):
+            layers += [nn.Linear(hidden, hidden), nn.BatchNorm1d(num_features=hidden), nn.ReLU()]
+
+        self.layers = nn.Sequential(*layers)
+        self.fc = nn.Linear(hidden, num_classes, bias=fc_bias)
+        print(fc_bias)
+
+    def forward(self, x, ret_feat=False):
+        x = x.view(x.shape[0], -1)
+        x = self.layers(x)
+        features = F.normalize(x)
+        x = self.fc(x)
+        if ret_feat:
+            return x, features
+        else:
+            return x

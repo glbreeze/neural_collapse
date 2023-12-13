@@ -5,7 +5,7 @@ import random
 import pickle
 import argparse
 from dataset.data import get_dataloader
-from model import Detached_ResNet
+from model import ResNet, MLP
 from utils import Graph_Vars, set_optimizer, set_optimizer_b, set_optimizer_b1, set_log_path, log, print_args, get_scheduler
 from utils import compute_ETF, compute_W_H_relation
 from utils import CrossEntropyLabelSmooth, CrossEntropyHinge, KoLeoLoss
@@ -169,8 +169,6 @@ def analysis(model, criterion_summed, loader, args):
 
     norm_M_CoV = (torch.std(M_norms) / torch.mean(M_norms)).item()
     norm_W_CoV = (torch.std(W_norms) / torch.mean(W_norms)).item()
-    norm_M = torch.mean(M_norms).item()
-    norm_W = torch.mean(W_norms).item()
 
     # mutual coherence
     def coherence(V):
@@ -182,20 +180,20 @@ def analysis(model, criterion_summed, loader, args):
     cos_M = coherence(M_ / M_norms)  # [D, C]
     cos_W = coherence(W  / W_norms)
 
+    # =========== NC2
+    nc2_h = compute_ETF(M_.T, device)
+    nc2_w = compute_ETF(W.T, device)
+
     # =========== NC3  ||W^T - M_||
     normalized_M = M_ / torch.norm(M_, 'fro')
     normalized_W = W  / torch.norm(W, 'fro')
     W_M_dist = (torch.norm(normalized_W - normalized_M) ** 2).item()
 
-    # =========== NC2
-    nc2_h = compute_ETF(M_.T, device)
-    nc2_w = compute_ETF(W.T, device)
-
     # =========== NC3 (all losses are equal paper)
     nc3_1 = compute_W_H_relation(W.T, M_, device)
 
-    normalized_M = M_  / torch.norm(M_,  dim=0)    # [512, C]/[C]
-    normalized_W = W.T / torch.norm(W.T, dim=0)    # [512, C]/[C]
+    normalized_M = M_ / torch.norm(M_, dim=0)  # [512, C]/[C]
+    normalized_W = W  / torch.norm(W,  dim=0)  # [512, C]/[C]
     l2_dist = torch.norm(normalized_M - normalized_W, dim=0)  # [C]
     nc3_2 = torch.mean(l2_dist)
 
@@ -206,8 +204,6 @@ def analysis(model, criterion_summed, loader, args):
         'nc1': Sw_invSb,
         'nc2_norm_h': norm_M_CoV,
         'nc2_norm_w': norm_W_CoV,
-        'norm_h': norm_M,
-        'norm_w': norm_W,
         'nc2_cos_h': cos_M,
         'nc2_cos_w': cos_W,
         'nc2_h': nc2_h,
@@ -225,7 +221,10 @@ def main(args):
     train_loader, test_loader = get_dataloader(args)
 
     # ====================  define model ====================
-    model = Detached_ResNet(pretrained=False, num_classes=args.C, backbone=args.model, args=args)
+    if args.model.lower() == 'mlp':
+        model = MLP(hidden = args.width, depth = args.depth, fc_bias=args.bias, num_classes=args.C)
+    else:
+        model = ResNet(pretrained=False, num_classes=args.C, backbone=args.model, args=args)
     model = model.to(device)
 
     if args.loss == 'ce':
@@ -292,7 +291,7 @@ def main(args):
                 torch.save(BEST_NET, os.path.join(args.output_dir, "best_net.pt"))
 
             # plot loss
-            if epoch == int(args.max_epochs//2) or epoch == args.max_epochs:
+            if epoch in [args.max_epochs//2, args.max_epochs] == 0:
                 plot_var(graphs1.epoch, graphs1.lr, graphs2.lr, type='Learning Rate',
                          fname=os.path.join(args.output_dir, 'lr.png'))
 
@@ -360,6 +359,12 @@ if __name__ == "__main__":
     parser.add_argument('--im_size', type=int, default=32)
     parser.add_argument('--padded_im_size', type=int, default=36)
     parser.add_argument('--C', type=int, default=10)
+    parser.add_argument('--norm', type=str, default='bn', help='Type of norm layer')  # bn|gn
+
+    # MLP settings (only when using mlp and res_adapt(in which case only width has effect))
+    parser.add_argument('--width', type=int, default=512)
+    parser.add_argument('--depth', type=int, default=4)
+    parser.add_argument('--no-bias', dest='bias', default=True, action='store_false')
 
     parser.add_argument('--lr', type=float, default=0.05)
     parser.add_argument('--end_lr', type=float, default=0.00001)  # poly LRD
