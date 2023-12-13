@@ -20,5 +20,6 @@ singularity exec --nv \
 --overlay ${ext3_path}:ro \
 ${sif_path} /bin/bash -c "
 source /ext3/env.sh
-python main.py --dset cifar10 --model resnet18 --wd 54 --scheduler cosine --loss ls --batch_size 8 --exp_name wd54_cs_b8_ls
+python main.py --dset cifar10 --model resnet18 --wd 54 --max_epochs 800 \
+    --scheduler ms --loss ce --batch_size 64 --seed 2024 --exp_name wd54_ms_ce_b64_s24
 "

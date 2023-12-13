@@ -1,4 +1,3 @@
-
 import os
 import sys
 import numpy as np
@@ -11,14 +10,17 @@ log_path = os.path.join(path, 'log.txt')
 with open(log_path, 'r') as f:
     lines = f.read().split('\n')
 
+if not os.path.exists(log_path):
+    print('{} not exist!'.format(log_path))
+
 lines = [line for line in lines if line[:4] == '>>>>']
-line3, line2, line1 =lines[-3], lines[-2], lines[-1]
-if '>>>> EP 1000, train' in line3:
+line3, line2, line1 = lines[-3], lines[-2], lines[-1]
 
+if '>>>>EP800, train' in line3:
     test_acc_idx = line2.index('acc:')
-    test_acc = float(line2[test_acc_idx+4:test_acc_idx+10])
+    test_acc = float(line2[test_acc_idx + 4:test_acc_idx + 10])
 
-    t = line3.split(',')
+    t = line3.replace('--', ',').split(',')
     dsp = [(e.split(':')[0]).strip().replace('-- ', '') for e in t[1:]] + ['test acc']
     dsp = ["{:>10}".format(e) for e in dsp]
     value = [float(e.split(':')[1]) for e in t[1:]] + [test_acc]
