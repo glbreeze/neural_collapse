@@ -76,7 +76,7 @@ def get_dataloader(args):
             datasets.FashionMNIST("data", download=True, train=False, transform=transform),
             batch_size=args.batch_size, shuffle=False)
 
-    elif args.dset == 'tinyi': # image_size:64 x 64
+    elif args.dset == 'tinyi':  # image_size:64 x 64
         normalize = transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
         transform = transforms.Compose([transforms.ToTensor(),
                                         normalize,

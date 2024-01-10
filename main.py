@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import os
 import torch
+import wandb
 import random
 import pickle
 import argparse
@@ -8,12 +9,11 @@ from dataset.data import get_dataloader
 from model import ResNet, MLP
 from utils import Graph_Vars, set_optimizer, set_optimizer_b, set_optimizer_b1, set_log_path, log, print_args, get_scheduler
 from utils import compute_ETF, compute_W_H_relation
-from utils import CrossEntropyLabelSmooth, CrossEntropyHinge, KoLeoLoss
+from utils import CrossEntropyLabelSmooth, CrossEntropyHinge, KoLeoLoss, analysis, AverageMeter, accuracy
 
 import numpy as np
 import torch.nn as nn
 import matplotlib.pyplot as plt
-from scipy.sparse.linalg import svds
 
 
 # analysis parameters
@@ -40,6 +40,8 @@ def plot_var(x_list, y_train, y_test, z=None, fname='fig.png', type='', title=No
 def train_one_epoch(model, criterion, train_loader, optimizer, epoch, args, lr_scheduler=None):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.train()
+    losses = AverageMeter('Loss', ':.4e')
+    train_acc = AverageMeter('Train_acc', ':.4e')
 
     koleo_loss = KoLeoLoss()
     for batch_idx, (data, target) in enumerate(train_loader, start=1):
@@ -67,156 +69,59 @@ def train_one_epoch(model, criterion, train_loader, optimizer, epoch, args, lr_s
             else:
                 kl_loss = koleo_loss(feat)
             loss += kl_loss * args.koleo_wt
+
+        # ==== update loss and acc
+        train_acc.update(torch.sum(out.argmax(dim=-1) == target).item() / target.size(0), target.size(0))
+        losses.update(loss.item(), target.size(0))
+
         loss.backward()
         optimizer.step()
-
-        accuracy = torch.mean((torch.argmax(out, dim=1) == target).float()).item()
 
         if args.scheduler == 'cosine' and epoch <= args.decay_epochs:
             lr_scheduler.step()
 
-    log('Train\tEpoch: {} [{}/{}] Batch Loss: {:.6f} Batch Accuracy: {:.6f} LR: {:.6f}'.format(
+    log('Train\tEpoch: {} [{}/{}] Train Loss: {:.5f} Train Accuracy: {:.5f} LR: {:.6f}'.format(
         epoch,
-        batch_idx,
-        len(train_loader),
-        loss.item(),
-        accuracy,
+        batch_idx, len(train_loader),
+        losses.avg,
+        train_acc.avg,
         optimizer.param_groups[0]['lr']
     ))
+    return train_acc.avg, losses.avg
 
 
-
-def analysis(model, criterion_summed, loader, args):
+def validate(model, val_loader):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    top1 = AverageMeter('Acc@1', ':6.2f')
+    top5 = AverageMeter('Acc@5', ':6.2f')
+
+    # switch to evaluate mode
     model.eval()
+    all_preds = []
+    all_targets = []
 
-    N    = [0 for _ in range(args.C)]
-    mean = [0 for _ in range(args.C)]
-    Sw   = 0
+    with torch.no_grad():
+        for i, (input, target) in enumerate(val_loader):
+            input = input.to(device)
+            target = target.to(device)
 
-    loss = 0
-    n_correct = 0
-    n_match = 0
+            # compute output
+            output = model(input, ret_feat=True)
 
-    for computation in ['Mean', 'Cov']:
-        for batch_idx, (data, target) in enumerate(loader, start=1):
+            # measure accuracy
+            acc1, acc5 = accuracy(output, target, topk=(1, 5))
+            top1.update(acc1.item(), input.size(0))
+            top5.update(acc5.item(), input.size(0))
 
-            data, target = data.to(device), target.to(device)
+            _, pred = torch.max(output, 1)
+            all_preds.extend(pred.cpu().numpy())
+            all_targets.extend(target.cpu().numpy())
 
-            with torch.no_grad():
-                output, h = model(data, ret_feat=True)  # [B, C], [B, 512]
-
-
-            for c in range(args.C):
-                idxs = (target == c).nonzero(as_tuple=True)[0]
-                if len(idxs) == 0:  # If no class-c in this batch
-                    continue
-
-                h_c = h[idxs, :]  # [B, 512]
-
-                if computation == 'Mean':
-                    # update class means
-                    mean[c] += torch.sum(h_c, dim=0)  #  CHW
-                    N[c] += h_c.shape[0]
-
-                elif computation == 'Cov':
-                    # update within-class cov
-                    z = h_c - mean[c].unsqueeze(0)  # [B, 512]
-                    cov = torch.matmul(z.unsqueeze(-1), z.unsqueeze(1))   # [B 512 1] [B 1 512] -> [B, 512, 512]
-                    Sw += torch.sum(cov, dim=0)  # [512, 512]
-
-            # during calculation of class cov, calculate loss
-            if computation == 'Cov':
-                loss += criterion_summed(output, target).item()
-
-                # 1) network's accuracy
-                net_pred = torch.argmax(output, dim=1)
-                n_correct += sum(net_pred == target).item()
-
-                # 2) agreement between prediction and nearest class center
-                hm_dist = torch.cdist(h, M.T, p=2)  # [B, 512], [K, 512] -> [B, K]
-                NCC_pred = torch.argmin(hm_dist, dim=-1)
-                n_match += torch.sum(NCC_pred == net_pred).item()
-
-        if computation == 'Mean':
-            for c in range(args.C):
-                mean[c] /= N[c]
-                M = torch.stack(mean).T
-        elif computation == 'Cov':
-            loss /= sum(N)
-            Sw /= sum(N)
-            acc = n_correct/sum(N)
-            ncc_mismatch = 1 - n_match / sum(N)
-
-    # global mean
-    muG = torch.mean(M, dim=1, keepdim=True)  # [512, C]
-
-    # between-class covariance
-    M_ = M - muG  # [512, C]
-    Sb = torch.matmul(M_, M_.T) / args.C
-
-    # tr{Sw Sb^-1}
-    Sw = Sw.cpu().numpy()
-    Sb = Sb.cpu().numpy()
-    Sw  = np.float32(Sw)
-    Sb  = np.float32(Sb)
-    eigvec, eigval, _ = svds(Sb, k=args.C - 1)
-    inv_Sb = eigvec @ np.diag(eigval ** (-1)) @ eigvec.T
-    Sw_invSb = np.trace(Sw @ inv_Sb)
-
-    # ========== NC2.1 and NC2.2
-    W = model.classifier.weight.T  # [512, C]
-    M_norms = torch.norm(M_, dim=0)  # [C]
-    W_norms = torch.norm(W , dim=0)  # [C]
-
-    norm_M_CoV = (torch.std(M_norms) / torch.mean(M_norms)).item()
-    norm_W_CoV = (torch.std(W_norms) / torch.mean(W_norms)).item()
-
-    # mutual coherence
-    def coherence(V):
-        G = V.T @ V  # [C, D] [D, C]
-        G += torch.ones((args.C, args.C), device=device) / (args.C - 1)
-        G -= torch.diag(torch.diag(G))  # [C, C]
-        return torch.norm(G, 1).item() / (args.C * (args.C - 1))
-
-    cos_M = coherence(M_ / M_norms)  # [D, C]
-    cos_W = coherence(W  / W_norms)
-
-    # =========== NC2
-    nc2_h = compute_ETF(M_.T, device)
-    nc2_w = compute_ETF(W.T, device)
-
-    # =========== NC3  ||W^T - M_||
-    normalized_M = M_ / torch.norm(M_, 'fro')
-    normalized_W = W  / torch.norm(W, 'fro')
-    W_M_dist = (torch.norm(normalized_W - normalized_M) ** 2).item()
-
-    # =========== NC3 (all losses are equal paper)
-    nc3_1 = compute_W_H_relation(W.T, M_, device)
-
-    normalized_M = M_ / torch.norm(M_, dim=0)  # [512, C]/[C]
-    normalized_W = W  / torch.norm(W,  dim=0)  # [512, C]/[C]
-    l2_dist = torch.norm(normalized_M - normalized_W, dim=0)  # [C]
-    nc3_2 = torch.mean(l2_dist)
-
-    return {
-        'loss': loss,
-        'acc': acc,
-        'ncc_mismatch': ncc_mismatch,
-        'nc1': Sw_invSb,
-        'nc2_norm_h': norm_M_CoV,
-        'nc2_norm_w': norm_W_CoV,
-        'nc2_cos_h': cos_M,
-        'nc2_cos_w': cos_W,
-        'nc2_h': nc2_h,
-        'nc2_w': nc2_w,
-        'nc3': W_M_dist,
-        'nc3_1': nc3_1,
-        'nc3_2': nc3_2,
-    }
+    return top1.avg, top5.avg
 
 
 def main(args):
+
     MAX_TEST_ACC, BEST_EPOCH=0.0, 0
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     # ==================== data loader ====================
@@ -259,10 +164,17 @@ def main(args):
     lr_scheduler = get_scheduler(args, optimizer, n_batches=len(train_loader))
 
     graphs1 = Graph_Vars()  # for training nc
-    graphs2 = Graph_Vars()  # for testing nc
+    # graphs2 = Graph_Vars()  # for testing nc
 
+    # tell wandb to watch what the model gets up to: gradients, weights, and more!
+    wandb.watch(model, criterion, log="all", log_freq=20)                         # --------------------------wandb
     for epoch in range(1, args.max_epochs + 1):
-        train_one_epoch(model, criterion, train_loader, optimizer, epoch, args, lr_scheduler=lr_scheduler)
+        train_acc, train_loss = train_one_epoch(model, criterion, train_loader, optimizer, epoch, args, lr_scheduler=lr_scheduler)
+
+        wandb.log({'train/train_acc': train_acc,
+                   'train/train_loss': train_loss, 
+                   'lr': optimizer.param_groups[0]['lr']},
+                  step=epoch)
 
         if args.scheduler in ['step', 'ms', 'multi_step', 'poly']:
             lr_scheduler.step()
@@ -270,70 +182,40 @@ def main(args):
         if epoch in exam_epochs:
 
             nc_train = analysis(model, criterion_summed, train_loader, args)
-            nc_val   = analysis(model, criterion_summed, test_loader, args)
+            val_acc1, val_acc5 = validate(model, test_loader)
+            nc_train['test_acc'] = val_acc1
+            # nc_val   = analysis(model, criterion_summed, test_loader, args)
             graphs1.load_dt(nc_train, epoch=epoch, lr=optimizer.param_groups[0]['lr'])
-            graphs2.load_dt(nc_val,   epoch=epoch, lr=optimizer.param_groups[0]['lr'])
+            # graphs2.load_dt(nc_val,   epoch=epoch, lr=optimizer.param_groups[0]['lr'])
 
-            log('>>>>EP{}, train loss:{:.4f}, acc:{:.4f}, NC1:{:.4f}, NC2h:{:.4f}, NC2w:{:.4f}, NC3:{:.4f}-- '
-                'NC2-1:{:.4f}, NC2-2:{:.4f}, NC2-1W:{:.4f}, NC2-2W:{:.4f}, NC3:{:.4f}, NC3_2:{:.4f}'.format(
-                epoch, graphs1.loss[-1], graphs1.acc[-1], graphs1.nc1[-1], graphs1.nc2_h[-1], graphs1.nc2_w[-1], graphs1.nc3_1[-1],
-                graphs1.nc2_norm_h[-1], graphs1.nc2_cos_h[-1], graphs1.nc2_norm_w[-1], graphs1.nc2_cos_w[-1], graphs1.nc3[-1], graphs1.nc3_2[-1]
-            ))
+            wandb.log({'nc/loss': nc_train['loss'],
+                       'nc/acc': nc_train['acc'],
+                       'nc/nc1': nc_train['nc1'],
+                       'nc/nc2h': nc_train['nc2_h'],
+                       'nc/nc2w': nc_train['nc2_w'],
+                       'nc/nc3_1': nc_train['nc3_1'],
+                       'nc/nc3': nc_train['nc3'],
+                       'nc/w_norm': nc_train['w_mnorm'],
+                       'nc/h_norm': nc_train['h_mnorm'],
+                       }, step=epoch + 1)
 
-            log('>>>>EP{}, test loss:{:.4f}, acc:{:.4f}, NC1:{:.4f}, NC2h:{:.4f}, NC2w:{:.4f}, NC3:{:.4f}-- '
-                'NC2-1:{:.4f}, NC2-2:{:.4f}, NC3:{:.4f}'.format(
-                epoch, graphs2.loss[-1], graphs2.acc[-1], graphs2.nc1[-1], graphs2.nc2_h[-1], graphs2.nc2_w[-1], graphs2.nc3_1[-1],
-                graphs2.nc2_norm_h[-1], graphs2.nc2_cos_h[-1], graphs2.nc3[-1]
-                ))
+            log('>>>>EP{}, train loss:{:.4f}, acc:{:.4f}, NC1:{:.4f}, NC3_1:{:.4f}, NC3:{:.4f}, Test_Acc:{:.4f}'.format(
+                epoch, graphs1.loss[-1], graphs1.acc[-1], graphs1.nc1[-1], graphs1.nc3_1[-1], graphs1.nc3[-1], graphs1.test_acc[-1]))
 
-            if graphs2.acc[-1] > MAX_TEST_ACC and epoch >= 100:
-                MAX_TEST_ACC = graphs2.acc[-1]
+            if val_acc1 > MAX_TEST_ACC and epoch >= 100:
+                MAX_TEST_ACC = val_acc1
                 BEST_EPOCH = epoch
                 BEST_NET = model.state_dict()
                 torch.save(BEST_NET, os.path.join(args.output_dir, "best_net.pt"))
 
-            # plot loss
-            if epoch in [args.max_epochs//2, args.max_epochs] == 0:
-                plot_var(graphs1.epoch, graphs1.lr, graphs2.lr, type='Learning Rate',
-                         fname=os.path.join(args.output_dir, 'lr.png'))
-
-                plot_var(graphs1.epoch, graphs1.loss, graphs2.loss, type='Loss',
-                         fname=os.path.join(args.output_dir, 'loss.png'))
-
-                plot_var(graphs1.epoch,
-                         [100*(1-acc) for acc in graphs1.acc],
-                         [100*(1-acc) for acc in graphs2.acc],
-                         type='Error',
-                         fname=os.path.join(args.output_dir, 'error.png'))
-
-                plot_var(graphs1.epoch, graphs1.nc1, graphs2.nc1, type='NC1',
-                         fname=os.path.join(args.output_dir, 'nc1.png'))
-
-                plot_var(graphs1.epoch, graphs1.nc2_norm_h, graphs2.nc2_norm_h, z=graphs1.nc2_norm_w, type='NC2-1',
-                         fname=os.path.join(args.output_dir, 'nc2_1.png'), zlabel='NC2-1 of Classifier')
-
-                plot_var(graphs1.epoch, graphs1.nc2_cos_h, graphs2.nc2_cos_h, z=graphs1.nc2_cos_w, type='NC2-2',
-                         fname=os.path.join(args.output_dir, 'nc2_2.png'), zlabel='NC2-2 of Classifier')
-
-                plot_var(graphs1.epoch, graphs1.nc2_h, graphs2.nc2_h, z=graphs1.nc2_w, type='NC2',
-                         fname=os.path.join(args.output_dir, 'nc2.png'), zlabel='NC2 of Classifier')
-
-                plot_var(graphs1.epoch, graphs1.nc3, graphs2.nc3, type='NC3', ylabel='||W - H||^2',
-                         fname=os.path.join(args.output_dir, 'nc3.png'))
-
     BEST_IDX = exam_epochs.index(BEST_EPOCH)
-    log('>>>>EP{}, Best Test Acc:{}, Train NC1:{:.4f}, NC2h:{:.4f}, NC2w:{:.4f}, NC3:{:.4f} -- '
-        'NC2-1:{:.4f}, NC2-2:{:.4f}, NC2-1W:{:.4f}, NC2-2W:{:.4f}, NC3:{:.4f}'.format(
-        BEST_EPOCH, MAX_TEST_ACC, graphs1.nc1[BEST_IDX], graphs1.nc2_h[BEST_IDX], graphs1.nc2_w[BEST_IDX], graphs1.nc3_1[BEST_IDX],
-        graphs1.nc2_norm_h[BEST_IDX], graphs1.nc2_cos_h[BEST_IDX], graphs1.nc2_norm_w[BEST_IDX], graphs1.nc2_cos_w[BEST_IDX], graphs1.nc3[BEST_IDX]
+    log('>>>>EP{}, Best Test Acc:{}, Train NC1:{:.4f}, NC2h:{:.4f}, NC2w:{:.4f}, NC3_1:{:.4f}, NC3:{:.4f}'.format(
+        BEST_EPOCH, MAX_TEST_ACC, graphs1.nc1[BEST_IDX], graphs1.nc2_h[BEST_IDX], graphs1.nc2_w[BEST_IDX], graphs1.nc3_1[BEST_IDX], graphs1.nc3[BEST_IDX]
     ))
 
     fname = os.path.join(args.output_dir, 'graph1.pickle')
     with open(fname, 'wb') as f:
         pickle.dump(graphs1, f)
-    fname = os.path.join(args.output_dir, 'graph2.pickle')
-    with open(fname, 'wb') as f:
-        pickle.dump(graphs2, f)
 
 
 def set_seed(SEED=666):
@@ -414,4 +296,13 @@ if __name__ == "__main__":
     log('save log to path {}'.format(args.output_dir))
     log(print_args(args))
 
-    main(args)
+    os.environ["WANDB_API_KEY"] = "0c0abb4e8b5ce4ee1b1a4ef799edece5f15386ee"
+    os.environ["WANDB_MODE"] = "online"  # "dryrun"
+    os.environ["WANDB_CACHE_DIR"] = "/scratch/lg154/sseg/.cache/wandb"
+    os.environ["WANDB_CONFIG_DIR"] = "/scratch/lg154/sseg/.config/wandb"
+    wandb.login(key='0c0abb4e8b5ce4ee1b1a4ef799edece5f15386ee')
+    wandb.init(project="NC3_" + str(args.dataset),
+               name=args.store_name.split('/')[-1]
+               )
+    wandb.config.update(args)
+    main(wandb.config)
