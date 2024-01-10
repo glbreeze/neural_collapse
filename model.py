@@ -14,7 +14,7 @@ class ResNet(nn.Module):
         super(ResNet, self).__init__()
 
         # Load the pretrained ResNet model
-        if args.norm_type == 'bn':
+        if args.norm == 'bn':
             resnet_model = models.__dict__[backbone](pretrained=pretrained)
         else:
             resnet_model = models.__dict__[backbone](pretrained=pretrained, norm_layer=GroupNorm32)

@@ -158,6 +158,8 @@ def analysis(model, criterion_summed, loader, args):
     # tr{Sw Sb^-1}
     Sw = Sw.cpu().numpy()
     Sb = Sb.cpu().numpy()
+    Sw  = np.float32(Sw)
+    Sb  = np.float32(Sb)
     eigvec, eigval, _ = svds(Sb, k=args.C - 1)
     inv_Sb = eigvec @ np.diag(eigval ** (-1)) @ eigvec.T
     Sw_invSb = np.trace(Sw @ inv_Sb)
