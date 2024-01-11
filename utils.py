@@ -413,7 +413,7 @@ def analysis(model, criterion_summed, loader, args):
     Sw_invSb = np.trace(Sw @ inv_Sb)
 
     # ========== NC2.1 and NC2.2
-    W = model.classifier.weight.T  # [512, C]
+    W = model.classifier.weight.detach().T  # [512, C]
     M_norms = torch.norm(M_, dim=0)  # [C]
     W_norms = torch.norm(W , dim=0)  # [C]
 

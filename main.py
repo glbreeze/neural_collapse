@@ -80,13 +80,6 @@ def train_one_epoch(model, criterion, train_loader, optimizer, epoch, args, lr_s
         if args.scheduler == 'cosine' and epoch <= args.decay_epochs:
             lr_scheduler.step()
 
-    log('Train\tEpoch: {} [{}/{}] Train Loss: {:.5f} Train Accuracy: {:.5f} LR: {:.6f}'.format(
-        epoch,
-        batch_idx, len(train_loader),
-        losses.avg,
-        train_acc.avg,
-        optimizer.param_groups[0]['lr']
-    ))
     return train_acc.avg, losses.avg
 
 
@@ -106,7 +99,7 @@ def validate(model, val_loader):
             target = target.to(device)
 
             # compute output
-            output = model(input, ret_feat=True)
+            output, feat = model(input, ret_feat=True)
 
             # measure accuracy
             acc1, acc5 = accuracy(output, target, topk=(1, 5))
@@ -170,9 +163,14 @@ def main(args):
     wandb.watch(model, criterion, log="all", log_freq=20)                         # --------------------------wandb
     for epoch in range(1, args.max_epochs + 1):
         train_acc, train_loss = train_one_epoch(model, criterion, train_loader, optimizer, epoch, args, lr_scheduler=lr_scheduler)
+        val_acc1, val_acc5 = validate(model, test_loader)
+        log('Train\tEpoch: {}, Train Loss: {:.5f}, Train Accuracy: {:.5f}, Val Acc: {:.5f}, LR: {:.6f}'.format(
+        epoch, train_loss, train_acc, val_acc1, optimizer.param_groups[0]['lr']))
 
         wandb.log({'train/train_acc': train_acc,
                    'train/train_loss': train_loss, 
+                   'val/acc1':val_acc1,
+                   'val/acc5':val_acc5,
                    'lr': optimizer.param_groups[0]['lr']},
                   step=epoch)
 
@@ -182,7 +180,6 @@ def main(args):
         if epoch in exam_epochs:
 
             nc_train = analysis(model, criterion_summed, train_loader, args)
-            val_acc1, val_acc5 = validate(model, test_loader)
             nc_train['test_acc'] = val_acc1
             # nc_val   = analysis(model, criterion_summed, test_loader, args)
             graphs1.load_dt(nc_train, epoch=epoch, lr=optimizer.param_groups[0]['lr'])
@@ -301,8 +298,8 @@ if __name__ == "__main__":
     os.environ["WANDB_CACHE_DIR"] = "/scratch/lg154/sseg/.cache/wandb"
     os.environ["WANDB_CONFIG_DIR"] = "/scratch/lg154/sseg/.config/wandb"
     wandb.login(key='0c0abb4e8b5ce4ee1b1a4ef799edece5f15386ee')
-    wandb.init(project="NC3_" + str(args.dataset),
-               name=args.store_name.split('/')[-1]
+    wandb.init(project="NC3_" + str(args.dset),
+               name=args.exp_name.split('/')[-1]
                )
     wandb.config.update(args)
     main(wandb.config)
