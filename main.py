@@ -12,6 +12,9 @@ from utils import CrossEntropyLabelSmooth, CrossEntropyHinge, KoLeoLoss
 
 import numpy as np
 import torch.nn as nn
+from metrics import ECELoss
+from torch.nn import functional as F
+from sklearn.metrics import accuracy_score
 import matplotlib.pyplot as plt
 from scipy.sparse.linalg import svds
 
@@ -165,7 +168,7 @@ def analysis(model, criterion_summed, loader, args):
     Sw_invSb = np.trace(Sw @ inv_Sb)
 
     # ========== NC2.1 and NC2.2
-    W = model.classifier.weight.T  # [512, C]
+    W = model.classifier.weight.detach().T  # [512, C]
     M_norms = torch.norm(M_, dim=0)  # [C]
     W_norms = torch.norm(W , dim=0)  # [C]
 
@@ -216,8 +219,24 @@ def analysis(model, criterion_summed, loader, args):
     }
 
 
+def get_logits_labels(data_loader, net):
+    logits_list = []
+    labels_list = []
+    net.eval()
+    with torch.no_grad():
+        for data, label in data_loader:
+            data = data.cuda()
+            logits = net(data)
+            logits_list.append(logits)
+            labels_list.append(label)
+        logits = torch.cat(logits_list).cuda()
+        labels = torch.cat(labels_list).cuda()
+    return logits, labels
+
+
 def main(args):
-    MAX_TEST_ACC, BEST_EPOCH=0.0, 0
+    MAX_TEST_ACC, MIN_TEST_LOSS, MIN_TEST_ECE =0.0, 100.0, 100.0
+    EP_ACC, EP_LOSS, EP_ECE = 0, 0, 0
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     # ==================== data loader ====================
     train_loader, test_loader = get_dataloader(args)
@@ -263,9 +282,39 @@ def main(args):
 
     for epoch in range(1, args.max_epochs + 1):
         train_one_epoch(model, criterion, train_loader, optimizer, epoch, args, lr_scheduler=lr_scheduler)
-
         if args.scheduler in ['step', 'ms', 'multi_step', 'poly']:
             lr_scheduler.step()
+            
+        ece_criterion = ECELoss(n_bins=20).cuda()
+        logits, labels = get_logits_labels(test_loader, model)                # on cuda 
+        val_loss = F.cross_entropy(logits, labels, reduction='mean').item()   # on cuda 
+        val_acc = (logits.argmax(dim=-1) == labels).sum().item()/len(labels)  # on cuda 
+        val_ece = ece_criterion(logits, labels).item()                        # on cuda 
+        log('---->EP{}, test acc: {:.4f}, test loss: {:.4f}, test ece: {:.4f}'.format(
+            epoch, val_acc, val_loss, val_ece
+        ))
+        
+        if val_acc > MAX_TEST_ACC and epoch >= 100:
+                MAX_TEST_ACC = val_acc
+                EP_ACC = epoch
+                BEST_NET = model.state_dict()
+                torch.save(BEST_NET, os.path.join(args.output_dir, "best_acc_net.pt"))
+                log('EP{} Store model (best TEST ACC) to {}'.format(epoch, os.path.join(args.output_dir, "best_acc_net.pt")))
+        if val_loss < MIN_TEST_LOSS and epoch >= 100:
+                MIN_TEST_LOSS = val_loss
+                EP_LOSS = epoch
+                BEST_NET = model.state_dict()
+                torch.save(BEST_NET, os.path.join(args.output_dir, "best_loss_net.pt"))
+                log('EP{} Store model (best TEST LOSS) to {}'.format(epoch, os.path.join(args.output_dir, "best_loss_net.pt")))
+        if val_ece < MIN_TEST_ECE and epoch >= 100:
+                MIN_TEST_ECE = val_ece
+                EP_ECE = epoch
+                BEST_NET = model.state_dict()
+                torch.save(BEST_NET, os.path.join(args.output_dir, "best_ece_net.pt"))
+                log('EP{} Store model (best TEST ECE) to {}'.format(epoch, os.path.join(args.output_dir, "best_ece_net.pt")))
+        
+        if epoch % 100 ==0 and args.save_pt: 
+            torch.save(model.state_dict(), os.path.join(args.output_dir, 'ep{}.pt'.format(epoch)))
 
         if epoch in exam_epochs:
 
@@ -286,54 +335,43 @@ def main(args):
                 graphs2.nc2_norm_h[-1], graphs2.nc2_cos_h[-1], graphs2.nc3[-1]
                 ))
 
-            if graphs2.acc[-1] > MAX_TEST_ACC and epoch >= 100:
-                MAX_TEST_ACC = graphs2.acc[-1]
-                BEST_EPOCH = epoch
-                BEST_NET = model.state_dict()
-                torch.save(BEST_NET, os.path.join(args.output_dir, "best_net.pt"))
-
-            # plot loss
-            if epoch in [args.max_epochs//2, args.max_epochs] == 0:
-                plot_var(graphs1.epoch, graphs1.lr, graphs2.lr, type='Learning Rate',
-                         fname=os.path.join(args.output_dir, 'lr.png'))
-
-                plot_var(graphs1.epoch, graphs1.loss, graphs2.loss, type='Loss',
-                         fname=os.path.join(args.output_dir, 'loss.png'))
-
-                plot_var(graphs1.epoch,
-                         [100*(1-acc) for acc in graphs1.acc],
-                         [100*(1-acc) for acc in graphs2.acc],
-                         type='Error',
-                         fname=os.path.join(args.output_dir, 'error.png'))
-
-                plot_var(graphs1.epoch, graphs1.nc1, graphs2.nc1, type='NC1',
-                         fname=os.path.join(args.output_dir, 'nc1.png'))
-
-                plot_var(graphs1.epoch, graphs1.nc2_norm_h, graphs2.nc2_norm_h, z=graphs1.nc2_norm_w, type='NC2-1',
-                         fname=os.path.join(args.output_dir, 'nc2_1.png'), zlabel='NC2-1 of Classifier')
-
-                plot_var(graphs1.epoch, graphs1.nc2_cos_h, graphs2.nc2_cos_h, z=graphs1.nc2_cos_w, type='NC2-2',
-                         fname=os.path.join(args.output_dir, 'nc2_2.png'), zlabel='NC2-2 of Classifier')
-
-                plot_var(graphs1.epoch, graphs1.nc2_h, graphs2.nc2_h, z=graphs1.nc2_w, type='NC2',
-                         fname=os.path.join(args.output_dir, 'nc2.png'), zlabel='NC2 of Classifier')
-
-                plot_var(graphs1.epoch, graphs1.nc3, graphs2.nc3, type='NC3', ylabel='||W - H||^2',
-                         fname=os.path.join(args.output_dir, 'nc3.png'))
-
-    BEST_IDX = exam_epochs.index(BEST_EPOCH)
-    log('>>>>EP{}, Best Test Acc:{}, Train NC1:{:.4f}, NC2h:{:.4f}, NC2w:{:.4f}, NC3:{:.4f} -- '
-        'NC2-1:{:.4f}, NC2-2:{:.4f}, NC2-1W:{:.4f}, NC2-2W:{:.4f}, NC3:{:.4f}'.format(
-        BEST_EPOCH, MAX_TEST_ACC, graphs1.nc1[BEST_IDX], graphs1.nc2_h[BEST_IDX], graphs1.nc2_w[BEST_IDX], graphs1.nc3_1[BEST_IDX],
-        graphs1.nc2_norm_h[BEST_IDX], graphs1.nc2_cos_h[BEST_IDX], graphs1.nc2_norm_w[BEST_IDX], graphs1.nc2_cos_w[BEST_IDX], graphs1.nc3[BEST_IDX]
-    ))
-
     fname = os.path.join(args.output_dir, 'graph1.pickle')
     with open(fname, 'wb') as f:
         pickle.dump(graphs1, f)
     fname = os.path.join(args.output_dir, 'graph2.pickle')
     with open(fname, 'wb') as f:
         pickle.dump(graphs2, f)
+    
+    log('Finished Traning, Best TEST_ACC EP:{}/{:.4f}; Best TEST_LOSS EP:{}/{:.4f}; Best TEST_ECE EP:{}/{:.4f};'.format(
+        EP_ACC, MAX_TEST_ACC, EP_LOSS, MIN_TEST_LOSS, EP_ECE, MIN_TEST_ECE))
+    
+    # plot loss
+    plot_var(graphs1.epoch, graphs1.lr, graphs2.lr, type='Learning Rate',
+                fname=os.path.join(args.output_dir, 'lr.png'))
+
+    plot_var(graphs1.epoch, graphs1.loss, graphs2.loss, type='Loss',
+                fname=os.path.join(args.output_dir, 'loss.png'))
+
+    plot_var(graphs1.epoch,
+                [100*(1-acc) for acc in graphs1.acc],
+                [100*(1-acc) for acc in graphs2.acc],
+                type='Error',
+                fname=os.path.join(args.output_dir, 'error.png'))
+
+    plot_var(graphs1.epoch, graphs1.nc1, graphs2.nc1, type='NC1',
+                fname=os.path.join(args.output_dir, 'nc1.png'))
+
+    plot_var(graphs1.epoch, graphs1.nc2_norm_h, graphs2.nc2_norm_h, z=graphs1.nc2_norm_w, type='NC2-1',
+                fname=os.path.join(args.output_dir, 'nc2_1.png'), zlabel='NC2-1 of Classifier')
+
+    plot_var(graphs1.epoch, graphs1.nc2_cos_h, graphs2.nc2_cos_h, z=graphs1.nc2_cos_w, type='NC2-2',
+                fname=os.path.join(args.output_dir, 'nc2_2.png'), zlabel='NC2-2 of Classifier')
+
+    plot_var(graphs1.epoch, graphs1.nc2_h, graphs2.nc2_h, z=graphs1.nc2_w, type='NC2',
+                fname=os.path.join(args.output_dir, 'nc2.png'), zlabel='NC2 of Classifier')
+
+    plot_var(graphs1.epoch, graphs1.nc3, graphs2.nc3, type='NC3', ylabel='||W - H||^2',
+                fname=os.path.join(args.output_dir, 'nc3.png'))
 
 
 def set_seed(SEED=666):
@@ -386,6 +424,7 @@ if __name__ == "__main__":
     parser.add_argument('--margin', type=float, default=1.0)  # for ls loss
 
     parser.add_argument('--exp_name', type=str, default='baseline')
+    parser.add_argument('--save_pt', default=False, action='store_true')
 
     args = parser.parse_args()
     args.output_dir = os.path.join('/scratch/lg154/sseg/neural_collapse/result/{}/{}/'.format(args.dset, args.model), args.exp_name)
