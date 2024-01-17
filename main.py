@@ -313,7 +313,7 @@ def main(args):
                 torch.save(BEST_NET, os.path.join(args.output_dir, "best_ece_net.pt"))
                 log('EP{} Store model (best TEST ECE) to {}'.format(epoch, os.path.join(args.output_dir, "best_ece_net.pt")))
         
-        if epoch % 100 ==0 and args.save_pt: 
+        if epoch % 10 ==0 and args.save_pt: 
             torch.save(model.state_dict(), os.path.join(args.output_dir, 'ep{}.pt'.format(epoch)))
 
         if epoch in exam_epochs:

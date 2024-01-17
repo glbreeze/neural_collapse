@@ -39,14 +39,14 @@ class ModelWithTemperature(nn.Module):
 
     def set_temperature(self,
                         valid_loader,
-                        cross_validate='ece'):
+                        cross_validate='ece', n_bins=15):
         """
         Tune the tempearature of the model (using the validation set) with cross-validation on ECE or NLL
         """
         self.cuda()
         self.model.eval()
         nll_criterion = nn.CrossEntropyLoss().cuda()
-        ece_criterion = ECELoss().cuda()
+        ece_criterion = ECELoss(n_bins=n_bins).cuda()
 
         # First: collect all the logits and labels for the validation set
         logits_list = []

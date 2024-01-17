@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import pdb 
 import os
+import pickle 
 import torch
 import random
 import pickle
@@ -74,12 +75,14 @@ def get_logits_labels(data_loader, net):
 
 if __name__ == "__main__":
 
+    out = {}
     # Setting additional parameters
     torch.manual_seed(1)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     args = parseArgs()
     args.num_classes = dataset_num_classes[args.dset]
     args.save_path = os.path.join(args.save_path, args.dset, args.model, args.exp_name)
+    ckpt_name=args.ckpt
     args.ckpt = os.path.join(args.save_path, '{}.pt'.format(args.ckpt))
     
     # ==================== data loader ====================
@@ -95,12 +98,13 @@ if __name__ == "__main__":
     model.load_state_dict(torch.load(args.ckpt))
     
     nll_criterion = nn.CrossEntropyLoss().cuda()
-    ece_criterion = ECELoss().cuda()
-    adaece_criterion = AdaptiveECELoss().cuda()
-    cece_criterion = ClasswiseECELoss().cuda()
+    ece_criterion = ECELoss(n_bins=args.num_bins).cuda()
+    adaece_criterion = AdaptiveECELoss(n_bins=args.num_bins).cuda()
+    cece_criterion = ClasswiseECELoss(n_bins=args.num_bins).cuda()
     
     logits, labels = get_logits_labels(test_loader, model)
     test_acc = (logits.argmax(dim=-1) == labels).sum().item()/len(labels)  # on cuda 
+    out['before_tune'] = {'logits': logits.cpu().numpy(), 'labels':labels.cpu().numpy()}
     
     p_ece = ece_criterion(logits, labels).item()
     p_adaece = adaece_criterion(logits, labels).item()
@@ -114,10 +118,13 @@ if __name__ == "__main__":
     # ====================  Scaling with Temperature ====================
     # pdb.set_trace()
     scaled_model = ModelWithTemperature(model)
-    scaled_model.set_temperature(test_loader, cross_validate=args.cv_error)
+    scaled_model.set_temperature(test_loader, cross_validate=args.cv_error, n_bins=args.num_bins)
     T_opt = scaled_model.get_temperature()
     logits, labels = get_logits_labels(test_loader, scaled_model)
     test_acc = (logits.argmax(dim=-1) == labels).sum().item()/len(labels)  # on cuda
+    out['after_tune'] = {'logits': logits.cpu().numpy(), 'labels':labels.cpu().numpy()}
+    with open(os.path.join(args.save_path, '{}.pickle'.format(ckpt_name)), 'wb') as f:
+            pickle.dump(out, f)
 
     ece = ece_criterion(logits, labels).item()
     adaece = adaece_criterion(logits, labels).item()
