@@ -27,7 +27,8 @@ from temperature_scaling import ModelWithTemperature
 dataset_num_classes = {
     'cifar10': 10,
     'cifar100': 100,
-    'tiny_imagenet': 200
+    'tiny_imagenet': 200, 
+    'stl10': 10
 }
 
 def parseArgs():
