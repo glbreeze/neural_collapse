@@ -1,22 +1,21 @@
 # -*- coding: utf-8 -*-
 import os
+import wandb
 import torch
 import random
 import pickle
 import argparse
-from dataset.data import get_dataloader
+from nc_metric import analysis
 from model import ResNet, MLP
-from utils import Graph_Vars, set_optimizer, set_optimizer_b, set_optimizer_b1, set_log_path, log, print_args, get_scheduler
-from utils import compute_ETF, compute_W_H_relation
+from dataset.data import get_dataloader
+from utils import Graph_Vars, set_optimizer, set_log_path, log, print_args, get_scheduler, get_logits_labels, AverageMeter
 from utils import CrossEntropyLabelSmooth, CrossEntropyHinge, KoLeoLoss
 
 import numpy as np
 import torch.nn as nn
 from metrics import ECELoss
 from torch.nn import functional as F
-from sklearn.metrics import accuracy_score
 import matplotlib.pyplot as plt
-from scipy.sparse.linalg import svds
 
 
 # analysis parameters
@@ -40,10 +39,12 @@ def plot_var(x_list, y_train, y_test, z=None, fname='fig.png', type='', title=No
     plt.savefig(fname)
 
 
-def train_one_epoch(model, criterion, train_loader, optimizer, epoch, args, lr_scheduler=None):
+def train_one_epoch(model, criterion, train_loader, optimizer, epoch, args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.train()
 
+    train_loss = AverageMeter('Loss', ':.4e')
+    train_acc = AverageMeter('Train_acc', ':.4e')
     koleo_loss = KoLeoLoss()
     for batch_idx, (data, target) in enumerate(train_loader, start=1):
         if data.shape[0] != args.batch_size:
@@ -70,168 +71,16 @@ def train_one_epoch(model, criterion, train_loader, optimizer, epoch, args, lr_s
             else:
                 kl_loss = koleo_loss(feat)
             loss += kl_loss * args.koleo_wt
+        train_loss.update(loss.item(), target.size(0))
+
         loss.backward()
         optimizer.step()
 
-        accuracy = torch.mean((torch.argmax(out, dim=1) == target).float()).item()
+        train_acc.update(torch.sum(out.argmax(dim=-1) == target).item() / target.size(0),
+                         target.size(0)
+                         )
+    return train_loss, train_acc
 
-        if args.scheduler == 'cosine' and epoch <= args.decay_epochs:
-            lr_scheduler.step()
-
-    log('Train\tEpoch: {} [{}/{}] Batch Loss: {:.6f} Batch Accuracy: {:.6f} LR: {:.6f}'.format(
-        epoch,
-        batch_idx,
-        len(train_loader),
-        loss.item(),
-        accuracy,
-        optimizer.param_groups[0]['lr']
-    ))
-
-
-
-def analysis(model, criterion_summed, loader, args):
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model.eval()
-
-    N    = [0 for _ in range(args.C)]
-    mean = [0 for _ in range(args.C)]
-    Sw   = 0
-
-    loss = 0
-    n_correct = 0
-    n_match = 0
-
-    for computation in ['Mean', 'Cov']:
-        for batch_idx, (data, target) in enumerate(loader, start=1):
-
-            data, target = data.to(device), target.to(device)
-
-            with torch.no_grad():
-                output, h = model(data, ret_feat=True)  # [B, C], [B, 512]
-
-
-            for c in range(args.C):
-                idxs = (target == c).nonzero(as_tuple=True)[0]
-                if len(idxs) == 0:  # If no class-c in this batch
-                    continue
-
-                h_c = h[idxs, :]  # [B, 512]
-
-                if computation == 'Mean':
-                    # update class means
-                    mean[c] += torch.sum(h_c, dim=0)  #  CHW
-                    N[c] += h_c.shape[0]
-
-                elif computation == 'Cov':
-                    # update within-class cov
-                    z = h_c - mean[c].unsqueeze(0)  # [B, 512]
-                    cov = torch.matmul(z.unsqueeze(-1), z.unsqueeze(1))   # [B 512 1] [B 1 512] -> [B, 512, 512]
-                    Sw += torch.sum(cov, dim=0)  # [512, 512]
-
-            # during calculation of class cov, calculate loss
-            if computation == 'Cov':
-                loss += criterion_summed(output, target).item()
-
-                # 1) network's accuracy
-                net_pred = torch.argmax(output, dim=1)
-                n_correct += sum(net_pred == target).item()
-
-                # 2) agreement between prediction and nearest class center
-                hm_dist = torch.cdist(h, M.T, p=2)  # [B, 512], [K, 512] -> [B, K]
-                NCC_pred = torch.argmin(hm_dist, dim=-1)
-                n_match += torch.sum(NCC_pred == net_pred).item()
-
-        if computation == 'Mean':
-            for c in range(args.C):
-                mean[c] /= N[c]
-                M = torch.stack(mean).T
-        elif computation == 'Cov':
-            loss /= sum(N)
-            Sw /= sum(N)
-            acc = n_correct/sum(N)
-            ncc_mismatch = 1 - n_match / sum(N)
-
-    # global mean
-    muG = torch.mean(M, dim=1, keepdim=True)  # [512, C]
-
-    # between-class covariance
-    M_ = M - muG  # [512, C]
-    Sb = torch.matmul(M_, M_.T) / args.C
-
-    # tr{Sw Sb^-1}
-    Sw = Sw.cpu().numpy()
-    Sb = Sb.cpu().numpy()
-    Sw  = np.float32(Sw)
-    Sb  = np.float32(Sb)
-    eigvec, eigval, _ = svds(Sb, k=args.C - 1)
-    inv_Sb = eigvec @ np.diag(eigval ** (-1)) @ eigvec.T
-    Sw_invSb = np.trace(Sw @ inv_Sb)
-
-    # ========== NC2.1 and NC2.2
-    W = model.classifier.weight.detach().T  # [512, C]
-    M_norms = torch.norm(M_, dim=0)  # [C]
-    W_norms = torch.norm(W , dim=0)  # [C]
-
-    norm_M_CoV = (torch.std(M_norms) / torch.mean(M_norms)).item()
-    norm_W_CoV = (torch.std(W_norms) / torch.mean(W_norms)).item()
-
-    # mutual coherence
-    def coherence(V):
-        G = V.T @ V  # [C, D] [D, C]
-        G += torch.ones((args.C, args.C), device=device) / (args.C - 1)
-        G -= torch.diag(torch.diag(G))  # [C, C]
-        return torch.norm(G, 1).item() / (args.C * (args.C - 1))
-
-    cos_M = coherence(M_ / M_norms)  # [D, C]
-    cos_W = coherence(W  / W_norms)
-
-    # =========== NC2
-    nc2_h = compute_ETF(M_.T, device)
-    nc2_w = compute_ETF(W.T, device)
-
-    # =========== NC3  ||W^T - M_||
-    normalized_M = M_ / torch.norm(M_, 'fro')
-    normalized_W = W  / torch.norm(W, 'fro')
-    W_M_dist = (torch.norm(normalized_W - normalized_M) ** 2).item()
-
-    # =========== NC3 (all losses are equal paper)
-    nc3_1 = compute_W_H_relation(W.T, M_, device)
-
-    normalized_M = M_ / torch.norm(M_, dim=0)  # [512, C]/[C]
-    normalized_W = W  / torch.norm(W,  dim=0)  # [512, C]/[C]
-    l2_dist = torch.norm(normalized_M - normalized_W, dim=0)  # [C]
-    nc3_2 = torch.mean(l2_dist)
-
-    return {
-        'loss': loss,
-        'acc': acc,
-        'ncc_mismatch': ncc_mismatch,
-        'nc1': Sw_invSb,
-        'nc2_norm_h': norm_M_CoV,
-        'nc2_norm_w': norm_W_CoV,
-        'nc2_cos_h': cos_M,
-        'nc2_cos_w': cos_W,
-        'nc2_h': nc2_h,
-        'nc2_w': nc2_w,
-        'nc3': W_M_dist,
-        'nc3_1': nc3_1,
-        'nc3_2': nc3_2,
-    }
-
-
-def get_logits_labels(data_loader, net):
-    logits_list = []
-    labels_list = []
-    net.eval()
-    with torch.no_grad():
-        for data, label in data_loader:
-            data = data.cuda()
-            logits = net(data)
-            logits_list.append(logits)
-            labels_list.append(label)
-        logits = torch.cat(logits_list).cuda()
-        labels = torch.cat(labels_list).cuda()
-    return logits, labels
 
 
 def main(args):
@@ -258,32 +107,18 @@ def main(args):
         criterion = nn.MultiMarginLoss(p=1, margin=args.margin, reduction="mean")
     else:
         criterion = nn.CrossEntropyLoss()
-    criterion_summed = nn.CrossEntropyLoss(reduction='sum')
 
-    if args.bwd == '1_1' or len(args.bwd) == 1:
-        optimizer = set_optimizer(model, args, 0.9, log)
-    elif len(args.bwd) == 3:
-        optimizer = set_optimizer_b(model, args, 0.9, log)
-    elif len(args.bwd) == 5:
-        optimizer = set_optimizer_b1(model, args, 0.9, log)
-
-    if args.ckpt not in ['', 'null', 'none']:
-        optimizer = torch.optim.SGD(model.classifier.parameters(),
-                                    weight_decay=args.cls_wd,
-                                    lr=args.lr,
-                                    momentum=0.9)
-        for param in model.features.parameters():
-            param.requires_grad = False
-
-    lr_scheduler = get_scheduler(args, optimizer, n_batches=len(train_loader))
+    optimizer = set_optimizer(model, args, 0.9, log)
+    lr_scheduler = get_scheduler(args, optimizer)
 
     graphs1 = Graph_Vars()  # for training nc
     graphs2 = Graph_Vars()  # for testing nc
 
-    for epoch in range(1, args.max_epochs + 1):
-        train_one_epoch(model, criterion, train_loader, optimizer, epoch, args, lr_scheduler=lr_scheduler)
-        if args.scheduler in ['step', 'ms', 'multi_step', 'poly']:
-            lr_scheduler.step()
+    # ====================  start training ====================
+    wandb.watch(model, criterion, log="all", log_freq=10)
+    for epoch in range(args.max_epochs):
+        train_loss, train_acc = train_one_epoch(model, criterion, train_loader, optimizer, epoch, args)
+        lr_scheduler.step()
             
         ece_criterion = ECELoss(n_bins=20).cuda()
         logits, labels = get_logits_labels(test_loader, model)                # on cuda 
@@ -293,7 +128,18 @@ def main(args):
         log('---->EP{}, test acc: {:.4f}, test loss: {:.4f}, test ece: {:.4f}'.format(
             epoch, val_acc, val_loss, val_ece
         ))
+
+        wandb.log({
+            'overall/lr': optimizer.param_groups[0]['lr'],
+            'overall/train_loss': train_loss.avg,
+            'overall/train_acc': train_acc.avg,
+            'overall/val_loss': val_loss,
+            'overall/val_acc': val_acc,
+            'overall/val_ece': val_ece
+            },
+            step=epoch + 1)
         
+        # ================= store the model
         if val_acc > MAX_TEST_ACC and epoch >= 100:
                 MAX_TEST_ACC = val_acc
                 EP_ACC = epoch
@@ -312,28 +158,38 @@ def main(args):
                 BEST_NET = model.state_dict()
                 torch.save(BEST_NET, os.path.join(args.output_dir, "best_ece_net.pt"))
                 log('EP{} Store model (best TEST ECE) to {}'.format(epoch, os.path.join(args.output_dir, "best_ece_net.pt")))
-        
-        if epoch % 10 ==0 and args.save_pt: 
+
+        if (epoch % 10 ==0 or epoch == 5) and args.save_pt:
             torch.save(model.state_dict(), os.path.join(args.output_dir, 'ep{}.pt'.format(epoch)))
 
+        # ================= check NCs
         if epoch in exam_epochs:
 
-            nc_train = analysis(model, criterion_summed, train_loader, args)
-            nc_val   = analysis(model, criterion_summed, test_loader, args)
+            nc_train = analysis(model, train_loader, args)
+            nc_val   = analysis(model, test_loader, args)
             graphs1.load_dt(nc_train, epoch=epoch, lr=optimizer.param_groups[0]['lr'])
             graphs2.load_dt(nc_val,   epoch=epoch, lr=optimizer.param_groups[0]['lr'])
 
-            log('>>>>EP{}, train loss:{:.4f}, acc:{:.4f}, NC1:{:.4f}, NC2h:{:.4f}, NC2w:{:.4f}, NC3:{:.4f}-- '
-                'NC2-1:{:.4f}, NC2-2:{:.4f}, NC2-1W:{:.4f}, NC2-2W:{:.4f}, NC3:{:.4f}, NC3_2:{:.4f}'.format(
-                epoch, graphs1.loss[-1], graphs1.acc[-1], graphs1.nc1[-1], graphs1.nc2_h[-1], graphs1.nc2_w[-1], graphs1.nc3_1[-1],
-                graphs1.nc2_norm_h[-1], graphs1.nc2_cos_h[-1], graphs1.nc2_norm_w[-1], graphs1.nc2_cos_w[-1], graphs1.nc3[-1], graphs1.nc3_2[-1]
+            log('>>>>EP{}, train loss:{:.4f}, acc:{:.4f}, NC1:{:.4f}, NC2:{:.4f}, NC3:{:.4f}, w-norm:{:.4f}, h-norm:{:.4f}'.format(
+                epoch, graphs1.loss[-1], graphs1.acc[-1], graphs1.nc1[-1], graphs1.nc2[-1], graphs1.nc3[-1], graphs1.w_mnorm[-1], graphs1.h_mnorm[-1]
             ))
-
-            log('>>>>EP{}, test loss:{:.4f}, acc:{:.4f}, NC1:{:.4f}, NC2h:{:.4f}, NC2w:{:.4f}, NC3:{:.4f}-- '
-                'NC2-1:{:.4f}, NC2-2:{:.4f}, NC3:{:.4f}'.format(
-                epoch, graphs2.loss[-1], graphs2.acc[-1], graphs2.nc1[-1], graphs2.nc2_h[-1], graphs2.nc2_w[-1], graphs2.nc3_1[-1],
-                graphs2.nc2_norm_h[-1], graphs2.nc2_cos_h[-1], graphs2.nc3[-1]
+            log('>>>>EP{}, test loss:{:.4f}, acc:{:.4f}, NC1:{:.4f}, NC2:{:.4f}, NC3:{:.4f}'.format(
+                epoch, graphs2.loss[-1], graphs2.acc[-1], graphs2.nc1[-1], graphs2.nc2[-1], graphs2.nc3[-1]
                 ))
+
+            wandb.log({
+                'train_nc/nc1': nc_train['nc1'],
+                'train_nc/nc2': nc_train['nc2'],
+                'train_nc/nc3': nc_train['nc3'],
+                'train_nc/w-norm': nc_train['w_mnorm'],
+                'train_nc/h-norm': nc_train['h_mnorm'],
+                'val_nc/nc1': nc_val['nc1'],
+                'val_nc/nc2': nc_val['nc2'],
+                'val_nc/nc3': nc_val['nc3'],
+                'val_nc/w-norm': nc_val['w_mnorm'],
+                'val_nc/h-norm': nc_val['h_mnorm'],
+            },
+                step=epoch + 1)
 
     fname = os.path.join(args.output_dir, 'graph1.pickle')
     with open(fname, 'wb') as f:
@@ -392,8 +248,6 @@ if __name__ == "__main__":
     parser.add_argument('--ETF_fc', action='store_true', default=False)
     parser.add_argument('--test_ood', action='store_true', default=False)
     parser.add_argument('--min_scale', type=float, default=0.2)  # scale for MoCo Aug
-    parser.add_argument('--ckpt', type=str, default='')   # exp_name: wd54_ls
-    parser.add_argument('--load_fc', action='store_true', default=False)
 
     # dataset parameters of CIFAR10
     parser.add_argument('--im_size', type=int, default=32)
@@ -407,21 +261,17 @@ if __name__ == "__main__":
     parser.add_argument('--no-bias', dest='bias', default=True, action='store_false')
 
     parser.add_argument('--lr', type=float, default=0.05)
-    parser.add_argument('--end_lr', type=float, default=0.00001)  # poly LRD
-    parser.add_argument('--power', type=float, default=2.0)       # poly LRD
-    parser.add_argument('--decay_epochs', type=int, default=400)
+    parser.add_argument('--lr_decay', type=float, default=0.5)  # for step
+    parser.add_argument('--scheduler', type=str, default='ms')  # step|ms/multi_step/cosine
     parser.add_argument('--batch_size', type=int, default=128)
     parser.add_argument('--max_epochs', type=int, default=1000)
-    parser.add_argument('--lr_decay', type=float, default=0.5)
-    parser.add_argument('--scheduler', type=str, default='ms')  # step|ms/multi_step/cosine
 
     parser.add_argument('--wd', type=str, default='54')  # '54'|'01_54' | '01_54_54'
-    parser.add_argument('--bwd', type=str, default='1_1')
     parser.add_argument('--koleo_wt', type=float, default=0.0)
     parser.add_argument('--koleo_type', type=str, default='d')  # d|c  default|center
     parser.add_argument('--loss', type=str, default='ce')  # ce|ls|ceh|hinge
     parser.add_argument('--eps', type=float, default=0.05)  # for ls loss
-    parser.add_argument('--margin', type=float, default=1.0)  # for ls loss
+    parser.add_argument('--margin', type=float, default=1.0)  # for hinge loss
 
     parser.add_argument('--exp_name', type=str, default='baseline')
     parser.add_argument('--save_pt', default=False, action='store_true')
@@ -438,12 +288,11 @@ if __name__ == "__main__":
         args.bn_wd = args.conv_wd
     elif len(wds) == 3:
         args.conv_wd, args.bn_wd, args.cls_wd = [float(wd[0]) / 10 ** int(wd[1]) for wd in wds]
+
     if args.dset == 'cifar100':
         args.C=100
     elif args.dset == 'tinyi':
         args.C=200
-    if args.ckpt not in ['', 'none', 'null']:
-        args.ckpt = os.path.join('result', args.dset, args.model, args.ckpt, 'best_net.pt')
 
     set_seed(SEED = args.seed)
 
@@ -452,5 +301,15 @@ if __name__ == "__main__":
     set_log_path(args.output_dir)
     log('save log to path {}'.format(args.output_dir))
     log(print_args(args))
+
+    os.environ["WANDB_API_KEY"] = "0c0abb4e8b5ce4ee1b1a4ef799edece5f15386ee"
+    os.environ["WANDB_MODE"] = "online"  # "dryrun"
+    os.environ["WANDB_CACHE_DIR"] = "/scratch/lg154/sseg/.cache/wandb"
+    os.environ["WANDB_CONFIG_DIR"] = "/scratch/lg154/sseg/.config/wandb"
+    wandb.login(key='0c0abb4e8b5ce4ee1b1a4ef799edece5f15386ee')
+    wandb.init(project='nc3' + args.dataset,
+               name=args.exp_name
+               )
+    wandb.config.update(args)
 
     main(args)

@@ -122,13 +122,19 @@ bns = [(i / float(num_bins)) for i in range(num_bins)]
 
 # ====== plot acc
 def get_values(bin_dict, name):
+    num_samples = sum([bin['count'] for k, bin in bin_dict0.items()])
     y = []
-    for i in range(num_bins):
-        if bin_dict[i]['count'] >= 2:
-            n = (bin_dict[i][name] / bin_dict[i]['count']) * 100
-        else:
-            n=0
-        y.append(n)
+    if name in ['acc']:
+        for i in range(num_bins):
+            if bin_dict[i]['count'] >= 2:
+                n = (bin_dict[i][name] / bin_dict[i]['count']) * 100
+            else:
+                n=0
+            y.append(n)
+    elif name =='count':
+        for i in range(num_bins):
+            n = (bin_dict[i]['count'] / float(num_samples)) * 100
+            y.append(n)
     return y
 
 y0 = get_values(bin_dict0, 'acc')
@@ -165,6 +171,81 @@ axes[1].set_ylabel('Accuracy')
 axes[1].set_xlabel('Confidence')
 axes[0].set_xticks(custom_ticks[::4], (bns+[1.0])[::4])
 axes[1].set_title('Post Temperature Scaling')
+
+
+
+# =============== reliablity plot Before and After ===============
+
+
+mosaic = [
+    ["A0", "A1",],
+    ["B0", "B1",],
+]
+subplots_kwargs = dict(sharex=False, sharey=False, figsize=(10, 6))
+fig, axes = plt.subplot_mosaic(mosaic, **subplots_kwargs)
+
+
+bar_width = 0.45
+# Create positions for the bars
+positions1 = np.arange(len(bns))
+positions2 = positions1 + bar_width
+positions0 = (positions1+positions2)/2
+custom_ticks = list(positions0)+[20]
+
+y0 = get_values(bin_dict0, 'acc')
+y1 = get_values(bin_dict1, 'acc')
+y0a = get_values(bin_dict0a, 'acc')
+y1a = get_values(bin_dict1a, 'acc')
+
+i='A0'
+# Create side-by-side bar plots
+axes[i].bar(positions0, np.array(bns), width=bar_width*2, label='Expected', color='pink', alpha=0.5)
+axes[i].bar(positions1, np.array(y0)/100, width=bar_width, label='CE', color='blue', alpha=0.5)
+axes[i].bar(positions2, np.array(y1)/100, width=bar_width, label='LS', color='green', alpha=0.5)
+axes[i].legend()
+axes[i].set_ylabel('Accuracy')
+axes[i].set_xlabel('Confidence')
+axes[i].set_xticks(custom_ticks[::4], (bns+[1.0])[::4])
+axes[i].set_title('Pre Temperature Scaling')
+axes[i].grid(linestyle='--', alpha=0.5, zorder=0)
+
+i='A1'
+axes[i].bar(positions0, np.array(bns), width=bar_width*2, label='Expected', color='pink', alpha=0.5)
+axes[i].bar(positions1, np.array(y0a)/100, width=bar_width, label='CE', color='blue', alpha=0.5)
+axes[i].bar(positions2, np.array(y1a)/100, width=bar_width, label='LS', color='green', alpha=0.5)
+axes[i].legend()
+axes[i].set_ylabel('Accuracy')
+axes[i].set_xlabel('Confidence')
+axes[i].set_xticks(custom_ticks[::4], (bns+[1.0])[::4])
+axes[i].set_title('Post Temperature Scaling')
+axes[i].grid(linestyle='--', alpha=0.5, zorder=0)
+
+y0 = get_values(bin_dict0, 'count')
+y1 = get_values(bin_dict1, 'count')
+y0a = get_values(bin_dict0a, 'count')
+y1a = get_values(bin_dict1a, 'count')
+
+i='B0' # Pre T-Scaling
+axes[i].bar(positions1, np.array(y0), width=bar_width, label='CE', color='blue', alpha=0.5)
+axes[i].bar(positions2, np.array(y1), width=bar_width, label='LS', color='green', alpha=0.5)
+axes[i].legend()
+axes[i].set_ylabel('% of samples')
+axes[i].set_ylim(0,90)
+axes[i].set_xlabel('Confidence')
+axes[i].set_xticks(custom_ticks[::4], (bns+[1.0])[::4])
+axes[i].grid(linestyle='--', alpha=0.5, zorder=0)
+
+i='B1' # Post T-Scaling
+axes[i].bar(positions1, np.array(y0a), width=bar_width, label='CE', color='blue', alpha=0.5)
+axes[i].bar(positions2, np.array(y1a), width=bar_width, label='LS', color='green', alpha=0.5)
+axes[i].legend()
+axes[i].set_ylabel('% of samples')
+axes[i].set_xlabel('Confidence')
+axes[i].set_ylim(0,90)
+axes[i].set_xticks(custom_ticks[::4], (bns+[1.0])[::4])
+axes[i].grid(linestyle='--', alpha=0.5, zorder=0)
+
+
 
 # ====== plot confidence
 bns = [(i / float(num_bins)) for i in range(num_bins)]

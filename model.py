@@ -25,7 +25,7 @@ class ResNet(nn.Module):
                 resnet_model.conv1 = nn.Conv2d(1, conv1_out_ch, kernel_size=3, stride=1, padding=1, bias=False)  # Small dataset filter size used by He et al. (2015)
             else:
                 resnet_model.conv1 = nn.Conv2d(3, conv1_out_ch, kernel_size=3, stride=1, padding=1, bias=False)  # Small dataset filter size used by He et al. (2015)
-        resnet_model.maxpool = nn.MaxPool2d(kernel_size=1, stride=1, padding=0)
+        resnet_model.maxpool = nn.Identity()
 
         # Isolate the feature extraction layers
         self.features = nn.Sequential(*list(resnet_model.children())[:-1])
@@ -40,14 +40,6 @@ class ResNet(nn.Module):
 
             self.classifier.weight = nn.Parameter(torch.mm(weight, torch.eye(num_classes, resnet_model.fc.in_features)))
             self.classifier.weight.requires_grad_(False)
-
-        if args.ckpt not in ['', 'null', 'none']:
-            pretrain_wt = torch.load(args.ckpt)
-            if args.load_fc:  # load both feature extractor and fc
-                pass
-            else:             # not load fc
-                pretrain_wt = {k: v for k, v in pretrain_wt.items() if 'classifier' not in k}
-            self.load_state_dict(pretrain_wt, strict=False)
 
     def forward(self, x, ret_feat=False):
         x = self.features(x)
