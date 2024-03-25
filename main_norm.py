@@ -116,9 +116,9 @@ def main(args):
     # =================== theoretical solution ================
     K = args.C
     n = args.N / args.C
-    a_delta = np.log(K / (np.sqrt(K * args.N * args.wd_H * args.wd_W) + args.eps) - K + 1) / K
-    w_norm = np.sqrt((args.C - 1) / args.C) * args.C * np.sqrt(a_delta) * (n * args.wd_H / args.wd_W) ** (1 / 4)
-    h_norm = np.sqrt((args.C - 1) / args.C) * args.C * np.sqrt(a_delta) * (n * args.wd_H / args.wd_W) ** (-1 / 4)
+    a_delta = np.log(K / (np.sqrt(K * args.N * args.wd_H * args.wd_W) + args.eps) - K + 1)
+    w_norm = np.sqrt((args.C - 1) / args.C) * np.sqrt(a_delta) * (n * args.wd_H / args.wd_W) ** (1 / 4)
+    h_norm = np.sqrt((args.C - 1) / args.C) * np.sqrt(a_delta) * (n * args.wd_H / args.wd_W) ** (-1 / 4)
 
     log('===== Theoretical value for w_norm: {:.4f}, h_norm: {:.4f}'.format(w_norm, h_norm))
 
