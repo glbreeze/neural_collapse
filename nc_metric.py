@@ -1,7 +1,17 @@
 
 import torch
 import numpy as np
+import torch.nn as nn
+import torch.nn.functional as F
 from scipy.sparse.linalg import svds
+
+
+def entropy(net_output):
+    p = F.softmax(net_output, dim=1)
+    logp = F.log_softmax(net_output, dim=1)
+    plogp = p * logp
+    entropy = - torch.sum(plogp, dim=1)
+    return entropy
 
 
 def compute_ETF(W, device):  # W [K, 512]
@@ -127,4 +137,95 @@ def analysis(model, loader, args):
         'nc3': W_M_dist,
         "w_mnorm": np.mean(W_norms.cpu().numpy()),
         "h_mnorm": np.mean(M_norms.cpu().numpy()),
+    }
+
+
+def analysis_nc1(logits, targets, feats, num_classes):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    N, N_inc, N_cor = [0] * num_classes, [0] * num_classes, [0] * num_classes
+    mean = [0] * num_classes
+    Sw_all, Sw_cor, Sw_inc = 0, 0, 0
+
+    loss, n_correct, n_match = 0, 0, 0
+    logits, targets, feats = logits.to(device), targets.to(device), feats.to(device)
+    preds = logits.argmax(dim=-1)
+
+    criterion = nn.CrossEntropyLoss().cuda()
+    idxs_cor = (targets == preds).nonzero(as_tuple=True)[0]
+    idxs_inc = (targets != preds).nonzero(as_tuple=True)[0]
+    acc = (logits.argmax(dim=-1) == targets).sum().item() / len(targets)
+
+    # === loss
+    loss = criterion(logits, targets).item()
+    loss_cor = criterion(logits[idxs_cor], targets[idxs_cor]).item()
+    loss_inc = criterion(logits[idxs_inc], targets[idxs_inc]).item()
+
+    # === entropy
+    ent = torch.mean(entropy(logits))
+    ent_cor = torch.mean(entropy(logits[idxs_cor]))
+    ent_inc = torch.mean(entropy(logits[idxs_inc]))
+
+    for c in range(num_classes):
+        idxs = (preds == c).nonzero(as_tuple=True)[0]
+        idxs_cor = ((preds == c) * (targets == preds)).nonzero(as_tuple=True)[0]
+        idxs_inc = ((preds == c) * (targets != preds)).nonzero(as_tuple=True)[0]
+
+        # update class means
+        h_c = feats[idxs, :]  # [B, 512]
+        N[c] = h_c.shape[0]
+        mean[c] = torch.sum(h_c, dim=0) / h_c.shape[0]  # [512]
+
+        # update within-class cov
+        z = feats[idxs, :] - mean[c].unsqueeze(0)  # [B, 512]
+        cov = torch.matmul(z.unsqueeze(-1), z.unsqueeze(1))   # [B 512 1] [B 1 512] -> [B, 512, 512]
+        Sw_all += torch.sum(cov, dim=0)  # [512, 512]
+
+        z = feats[idxs_cor, :] - mean[c].unsqueeze(0)  # [B, 512]
+        cov = torch.matmul(z.unsqueeze(-1), z.unsqueeze(1))  # [B 512 1] [B 1 512] -> [B, 512, 512]
+        Sw_cor += torch.sum(cov, dim=0)  # [512, 512]
+        N_cor[c] += z.shape[0]
+
+        z = feats[idxs_inc, :] - mean[c].unsqueeze(0)  # [B, 512]
+        cov = torch.matmul(z.unsqueeze(-1), z.unsqueeze(1))  # [B 512 1] [B 1 512] -> [B, 512, 512]
+        Sw_inc += torch.sum(cov, dim=0)  # [512, 512]
+        N_inc[c] += z.shape[0]
+
+        M = torch.stack(mean).T
+        muG = torch.mean(M, dim=1, keepdim=True)  # [512, C]
+
+        # between-class covariance
+        M_ = M - muG  # [512, C]
+        Sb = torch.matmul(M_, M_.T) / num_classes
+        Sb = Sb.cpu().numpy()
+
+        # within-class varaince
+        Sw_all /= sum(N)
+        Sw_inc /= sum(N_inc)
+        Sw_cor /= sum(N_cor)
+        Sw_all = Sw_all.cpu().numpy()
+        Sw_inc = Sw_inc.cpu().numpy()
+        Sw_cor = Sw_cor.cpu().numpy()
+
+        # compute NC1
+        eigvec, eigval, _ = svds(Sb, k=num_classes - 1)
+        inv_Sb = eigvec @ np.diag(eigval ** (-1)) @ eigvec.T
+        nc1_all = np.trace(Sw_all @ inv_Sb)
+        nc1_cor = np.trace(Sw_cor @ inv_Sb)
+        nc1_inc = np.trace(Sw_inc @ inv_Sb)
+
+    return {
+        'acc': acc,
+
+        'loss': loss,
+        'loss_inc': loss_inc,
+        'loss_cor': loss_cor,
+
+        'nc1': nc1_all,
+        'nc1_inc': nc1_inc,
+        'nc1_cor': nc1_cor,
+
+        'ent': ent,
+        'ent_cor': ent_cor,
+        'ent_inc': ent_inc
     }

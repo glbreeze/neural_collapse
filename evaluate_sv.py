@@ -8,8 +8,6 @@ import pickle
 import argparse
 from dataset.data import get_dataloader
 from model import ResNet, MLP
-from utils import Graph_Vars, set_optimizer, set_optimizer_b, set_optimizer_b1, set_log_path, log, print_args, get_scheduler
-from utils import compute_ETF, compute_W_H_relation
 from utils import CrossEntropyLabelSmooth, CrossEntropyHinge, KoLeoLoss
 
 import numpy as np

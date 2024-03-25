@@ -8,15 +8,14 @@ import pickle
 import argparse
 from dataset.data import get_dataloader
 from model import ResNet, MLP
-from utils import Graph_Vars, set_optimizer, set_optimizer_b, set_optimizer_b1, set_log_path, log, print_args
-from utils import compute_ETF, get_logits_labels, get_logits_labels_feats, analysis_nc1, analysis_nc1_new
+from utils import  get_logits_labels, get_logits_labels_feats
+from nc_metric import analysis_nc1
 
 import numpy as np
 import torch.nn as nn
 import torch.backends.cudnn as cudnn
 from torch.nn import functional as F
 
-# Import temperature scaling and NLL utilities
 from temperature_scaling import ModelWithTemperature
 from metrics import ECELoss, AdaptiveECELoss, ClasswiseECELoss
 
@@ -37,7 +36,7 @@ def parseArgs():
     parser.add_argument('--norm', type=str, default='bn', help='Type of norm layer')  # bn|gn
     parser.add_argument('--num_classes', type=int, default=10)
 
-    parser.add_argument("--save_path", type=str, default='result/', help='Path to import the model')
+    parser.add_argument("--save_path", type=str, default='result3/', help='Path to import the model')
     parser.add_argument("--exp_name", type=str, default='null', help="exp_name of the model")
     parser.add_argument("--ckpt", type=str, default='null', help="file name of the pre-trained model")
     parser.add_argument('--load_fc', action='store_false', default=True)
@@ -65,14 +64,13 @@ class Graph_Dt:
         self.nc1_cor = []
         self.nc1_inc = []
 
-        self.ece_pre  = []
-        self.ece_post = []
-        self.adece_pre  = []
-        self.adece_post = []
-        self.opt_t = [] 
-        
+        self.ent = []
         self.ent_cor = []
         self.ent_inc = []
+
+        self.ece_pre  = []
+        self.ece_post = []
+        self.opt_t = []
 
     def load_dt(self, nc_dt, epoch):
         self.epoch.append(epoch)
@@ -115,23 +113,18 @@ if __name__ == "__main__":
 
         nll_criterion = nn.CrossEntropyLoss().cuda()
         ece_criterion = ECELoss(n_bins=args.num_bins).cuda()
-        adaece_criterion = AdaptiveECELoss(n_bins=args.num_bins).cuda()
-        cece_criterion = ClasswiseECELoss(n_bins=args.num_bins).cuda()
+        # adaece_criterion = AdaptiveECELoss(n_bins=args.num_bins).cuda()
+        # cece_criterion = ClasswiseECELoss(n_bins=args.num_bins).cuda()
 
         logits, labels, feats = get_logits_labels_feats(test_loader, model)
         test_acc = (logits.argmax(dim=-1) == labels).sum().item() / len(labels)  # on cuda
         out_sv['before_tune'] = {'logits': logits.cpu().numpy(), 'labels': labels.cpu().numpy()}
 
         p_ece = ece_criterion(logits, labels).item()
-        p_adaece = adaece_criterion(logits, labels).item()
-        p_cece = cece_criterion(logits, labels).item()
         p_nll = nll_criterion(logits, labels).item()
-        pdb.set_trace()
-        nc_dt = analysis_nc1_new(logits, labels, feats, num_classes=args.num_classes)
-        
+        nc_dt = analysis_nc1(logits, labels, feats, num_classes=args.num_classes)
         nc_dt['ece_pre'] = p_ece
-        nc_dt['adece_pre'] = p_adaece
-        print('CKPT:{}__Pre, Test_acc:{:.4f}, nll:{:.4f}, ece:{:.4f}, adaece:{:.4f}, cece:{:.4f}'.format(ckpt_idx, test_acc, p_nll, p_ece, p_adaece, p_cece))
+        print('CKPT:{}__Pre, Test_acc:{:.4f}, nll:{:.4f}, ece:{:.4f}'.format(ckpt_idx, test_acc, p_nll, p_ece))
 
         # ====================  Scaling with Temperature ====================
         # pdb.set_trace()
@@ -139,24 +132,22 @@ if __name__ == "__main__":
         scaled_model.set_temperature(test_loader, cross_validate=args.cv_error, n_bins=args.num_bins)
         T_opt = scaled_model.get_temperature()
         logits, labels = get_logits_labels(test_loader, scaled_model)
+
         test_acc = (logits.argmax(dim=-1) == labels).sum().item() / len(labels)  # on cuda
-        out_sv['after_tune'] = {'logits': logits.cpu().numpy(), 'labels': labels.cpu().numpy()}
+        ece = ece_criterion(logits, labels).item()
+        nll = nll_criterion(logits, labels).item()
+
+        # out_sv['after_tune'] = {'logits': logits.cpu().numpy(), 'labels': labels.cpu().numpy()}
         # with open(os.path.join(args.save_path, '{}.pickle'.format(ckpt_name)), 'wb') as f:
         #     pickle.dump(out, f)
 
-        ece = ece_criterion(logits, labels).item()
-        adaece = adaece_criterion(logits, labels).item()
-        cece = cece_criterion(logits, labels).item()
-        nll = nll_criterion(logits, labels).item()
-
-        print('CKPT:{}__Post, Test_acc:{:.4f}, nll:{:.4f}, ece:{:.4f}, adaece:{:.4f}, cece:{:.4f}'.format(ckpt_idx, test_acc, nll, ece, adaece, cece))
+        print('CKPT:{}__Post, Test_acc:{:.4f}, nll:{:.4f}, ece:{:.4f}'.format(ckpt_idx, test_acc, nll, ece))
 
         nc_dt['ece_post'] = ece
-        nc_dt['adece_post'] = adaece
         nc_dt['opt_t'] = T_opt
         plot_var.load_dt(nc_dt, epoch=ckpt_idx)
 
-    with open(os.path.join(args.save_path, 'evaluate_all_new_debug.pickle'), 'wb') as f:
+    with open(os.path.join(args.save_path, 'evaluate_all.pickle'), 'wb') as f:
         pickle.dump(plot_var, f)
 
 
