@@ -166,30 +166,34 @@ def main(args):
         if epoch in exam_epochs:
 
             nc_train = analysis(model, train_loader, args)
-            nc_val   = analysis(model, test_loader, args)
             graphs1.load_dt(nc_train, epoch=epoch, lr=optimizer.param_groups[0]['lr'])
-            graphs2.load_dt(nc_val,   epoch=epoch, lr=optimizer.param_groups[0]['lr'])
 
             log('>>>>EP{}, train loss:{:.4f}, acc:{:.4f}, NC1:{:.4f}, NC2:{:.4f}, NC3:{:.4f}, w-norm:{:.4f}, h-norm:{:.4f}'.format(
                 epoch, graphs1.loss[-1], graphs1.acc[-1], graphs1.nc1[-1], graphs1.nc2[-1], graphs1.nc3[-1], graphs1.w_mnorm[-1], graphs1.h_mnorm[-1]
             ))
-            log('>>>>EP{}, test loss:{:.4f}, acc:{:.4f}, NC1:{:.4f}, NC2:{:.4f}, NC3:{:.4f}'.format(
-                epoch, graphs2.loss[-1], graphs2.acc[-1], graphs2.nc1[-1], graphs2.nc2[-1], graphs2.nc3[-1]
-                ))
-
             wandb.log({
                 'train_nc/nc1': nc_train['nc1'],
                 'train_nc/nc2': nc_train['nc2'],
                 'train_nc/nc3': nc_train['nc3'],
                 'train_nc/w-norm': nc_train['w_mnorm'],
                 'train_nc/h-norm': nc_train['h_mnorm'],
-                'val_nc/nc1': nc_val['nc1'],
-                'val_nc/nc2': nc_val['nc2'],
-                'val_nc/nc3': nc_val['nc3'],
-                'val_nc/w-norm': nc_val['w_mnorm'],
-                'val_nc/h-norm': nc_val['h_mnorm'],
             },
                 step=epoch + 1)
+            
+            if False: 
+                nc_val = analysis(model, test_loader, args)
+                graphs2.load_dt(nc_val,   epoch=epoch, lr=optimizer.param_groups[0]['lr']) 
+                log('>>>>EP{}, test loss:{:.4f}, acc:{:.4f}, NC1:{:.4f}, NC2:{:.4f}, NC3:{:.4f}'.format(
+                    epoch, graphs2.loss[-1], graphs2.acc[-1], graphs2.nc1[-1], graphs2.nc2[-1], graphs2.nc3[-1]
+                    ))
+                wandb.log({
+                    'val_nc/nc1': nc_val['nc1'],
+                    'val_nc/nc2': nc_val['nc2'],
+                    'val_nc/nc3': nc_val['nc3'],
+                    'val_nc/w-norm': nc_val['w_mnorm'],
+                    'val_nc/h-norm': nc_val['h_mnorm'],
+                },
+                    step=epoch + 1)
 
     fname = os.path.join(args.output_dir, 'graph1.pickle')
     with open(fname, 'wb') as f:
@@ -277,7 +281,7 @@ if __name__ == "__main__":
     parser.add_argument('--save_pt', default=False, action='store_true')
 
     args = parser.parse_args()
-    args.output_dir = os.path.join('/scratch/lg154/sseg/neural_collapse/result/{}/{}/'.format(args.dset, args.model), args.exp_name)
+    args.output_dir = os.path.join('/scratch/lg154/sseg/neural_collapse/result3/{}/{}/'.format(args.dset, args.model), args.exp_name)
     if args.scheduler == 'ms':
         args.scheduler = 'multi_step'
     wds = args.wd.split('_')
@@ -307,7 +311,7 @@ if __name__ == "__main__":
     os.environ["WANDB_CACHE_DIR"] = "/scratch/lg154/sseg/.cache/wandb"
     os.environ["WANDB_CONFIG_DIR"] = "/scratch/lg154/sseg/.config/wandb"
     wandb.login(key='0c0abb4e8b5ce4ee1b1a4ef799edece5f15386ee')
-    wandb.init(project='nc3' + args.dataset,
+    wandb.init(project='nc3' + args.dset,
                name=args.exp_name
                )
     wandb.config.update(args)

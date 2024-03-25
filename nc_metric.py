@@ -74,12 +74,12 @@ def analysis(model, loader, args):
 
     # between-class covariance
     M_ = M - muG  # [512, C]
-    Sb = torch.matmul(M_, M_.T) / args.num_classes
+    Sb = torch.matmul(M_, M_.T) / args.C
 
     # ============ NC1: tr{Sw Sb^-1}
     Sw = Sw.cpu().numpy()
     Sb = Sb.cpu().numpy()
-    eigvec, eigval, _ = svds(Sb, k=args.num_classes - 1)
+    eigvec, eigval, _ = svds(Sb, k=args.C - 1)
     inv_Sb = eigvec @ np.diag(eigval ** (-1)) @ eigvec.T
     nc1 = np.trace(Sw @ inv_Sb)
 

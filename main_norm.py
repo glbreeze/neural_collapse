@@ -55,8 +55,8 @@ def train_one_epoch(model, criterion, train_loader, optimizer, epoch, args):
 
         optimizer.zero_grad()
         loss = criterion(out, target) + \
-               args.W_wd * torch.norm(model.classifier.weight) + args.b_wd * torch.norm(model.classifier.bias) + \
-               args.H_wd * torch.norm(feat)
+               args.wd_W * torch.sum(model.classifier.weight**2) /2 + args.wd_b * torch.sum(model.classifier.bias**2) / 2 + \
+               args.wd_H * torch.sum(feat**2) * (args.N / args.batch_size) /2
 
         if args.koleo_wt > 0:
             # compute global mean
@@ -265,21 +265,22 @@ if __name__ == "__main__":
     parser.add_argument('--exp_name', type=str, default='baseline')
     parser.add_argument('--save_pt', default=False, action='store_true')
 
-    args = parser.parse_args([])
+    args = parser.parse_args()
     args.output_dir = os.path.join('/scratch/lg154/sseg/neural_collapse/result3/{}/{}/'.format(args.dset, args.model),
                                    args.exp_name)
     if args.scheduler == 'ms':
         args.scheduler = 'multi_step'
-    if args.dset == 'cifar100':
+    if args.dset == 'cifar10':
         args.C = 10
         args.N = 50000
     elif args.dset == 'cifar100':
         args.C = 100
+        args.N = 50000
     elif args.dset == 'tinyi':
         args.C = 200
 
     args.conv_wd, args.bn_wd, args.cls_wd = 0.0, 0.0, 0.0
-    args.W_wd, args.H_wd, args.bn_wd = [float(e) for e in args.wd.split(',')]
+    args.wd_W, args.wd_H, args.wd_b = [float(e) for e in args.wd.split(',')]
 
     set_seed(SEED=args.seed)
 
