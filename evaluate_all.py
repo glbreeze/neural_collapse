@@ -36,7 +36,7 @@ def parseArgs():
     parser.add_argument('--norm', type=str, default='bn', help='Type of norm layer')  # bn|gn
     parser.add_argument('--num_classes', type=int, default=10)
 
-    parser.add_argument("--save_path", type=str, default='result3/', help='Path to import the model')
+    parser.add_argument("--save_path", type=str, default='result/', help='Path to import the model')
     parser.add_argument("--exp_name", type=str, default='null', help="exp_name of the model")
     parser.add_argument("--ckpt", type=str, default='null', help="file name of the pre-trained model")
     parser.add_argument('--load_fc', action='store_false', default=True)

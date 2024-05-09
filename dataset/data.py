@@ -26,11 +26,15 @@ def get_dataloader(args):
         test_tranform = get_moco_base_augmentation(min_scale=args.min_scale, normalize=normalize, size=32) if args.test_ood else transform
         train_loader = torch.utils.data.DataLoader(
             datasets.CIFAR10('data', train=True, download=True, transform=transform),
-            batch_size=args.batch_size, shuffle=True)
+            batch_size=args.batch_size, shuffle=True,
+            num_workers=4, pin_memory=True, persistent_workers=True
+            )
 
         test_loader = torch.utils.data.DataLoader(
             datasets.CIFAR10('data', train=False, download=True, transform=test_tranform),
-            batch_size=args.batch_size, shuffle=False)
+            batch_size=args.batch_size, shuffle=False,
+            num_workers=4, pin_memory=True, persistent_workers=True
+            )
 
     if args.dset == 'stl10':
         normalize = transforms.Normalize(mean=[0.4914, 0.4822, 0.4465], std=[0.2470, 0.2434, 0.2615])
@@ -42,10 +46,14 @@ def get_dataloader(args):
         test_tranform = get_moco_base_augmentation(min_scale=args.min_scale, normalize=normalize, size=96) if args.test_ood else transform
         train_loader = torch.utils.data.DataLoader(
             datasets.STL10('data', split='train', download=True, transform=transform),
-            batch_size=args.batch_size, shuffle=True)
+            batch_size=args.batch_size, shuffle=True, 
+            num_workers=4, pin_memory=True, persistent_workers=True
+            )
         test_loader = torch.utils.data.DataLoader(
             datasets.STL10('data', split='test', download=True, transform=test_tranform),
-            batch_size=args.batch_size, shuffle=False)
+            batch_size=args.batch_size, shuffle=False,
+            num_workers=4, pin_memory=True, persistent_workers=True
+            )
 
     elif args.dset == 'cifar100':
         normalize = transforms.Normalize(mean=[0.5071, 0.4865, 0.4409], std=[0.2673, 0.2564, 0.2761])
@@ -56,11 +64,15 @@ def get_dataloader(args):
         test_tranform = get_moco_base_augmentation(min_scale=args.min_scale, normalize=normalize, size=32) if args.test_ood else transform
         train_loader = torch.utils.data.DataLoader(
             datasets.CIFAR100('data', train=True, download=True, transform=transform),
-            batch_size=args.batch_size, shuffle=True)
+            batch_size=args.batch_size, shuffle=True,
+            num_workers=4, pin_memory=True, persistent_workers=True
+            )
 
         test_loader = torch.utils.data.DataLoader(
             datasets.CIFAR100('data', train=False, download=True, transform=test_tranform),
-            batch_size=args.batch_size, shuffle=False)
+            batch_size=args.batch_size, shuffle=False,
+            num_workers=4, pin_memory=True, persistent_workers=True
+            )
 
     elif args.dset == 'fmnist':
         fashion_mnist = torchvision.datasets.FashionMNIST(download=True, train=True, root="data").train_data.float()

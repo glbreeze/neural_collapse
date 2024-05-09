@@ -191,28 +191,28 @@ def analysis_nc1(logits, targets, feats, num_classes):
         Sw_inc += torch.sum(cov, dim=0)  # [512, 512]
         N_inc[c] += z.shape[0]
 
-        M = torch.stack(mean).T
-        muG = torch.mean(M, dim=1, keepdim=True)  # [512, C]
+    M = torch.stack(mean).T
+    muG = torch.mean(M, dim=1, keepdim=True)  # [512, C]
 
-        # between-class covariance
-        M_ = M - muG  # [512, C]
-        Sb = torch.matmul(M_, M_.T) / num_classes
-        Sb = Sb.cpu().numpy()
+    # between-class covariance
+    M_ = M - muG  # [512, C]
+    Sb = torch.matmul(M_, M_.T) / num_classes
+    Sb = Sb.cpu().numpy()
 
-        # within-class varaince
-        Sw_all /= sum(N)
-        Sw_inc /= sum(N_inc)
-        Sw_cor /= sum(N_cor)
-        Sw_all = Sw_all.cpu().numpy()
-        Sw_inc = Sw_inc.cpu().numpy()
-        Sw_cor = Sw_cor.cpu().numpy()
+    # within-class varaince
+    Sw_all /= sum(N)
+    Sw_inc /= sum(N_inc)
+    Sw_cor /= sum(N_cor)
+    Sw_all = Sw_all.cpu().numpy()
+    Sw_inc = Sw_inc.cpu().numpy()
+    Sw_cor = Sw_cor.cpu().numpy()
 
-        # compute NC1
-        eigvec, eigval, _ = svds(Sb, k=num_classes - 1)
-        inv_Sb = eigvec @ np.diag(eigval ** (-1)) @ eigvec.T
-        nc1_all = np.trace(Sw_all @ inv_Sb)
-        nc1_cor = np.trace(Sw_cor @ inv_Sb)
-        nc1_inc = np.trace(Sw_inc @ inv_Sb)
+    # compute NC1
+    eigvec, eigval, _ = svds(Sb, k=num_classes - 1)
+    inv_Sb = eigvec @ np.diag(eigval ** (-1)) @ eigvec.T
+    nc1_all = np.trace(Sw_all @ inv_Sb)
+    nc1_cor = np.trace(Sw_cor @ inv_Sb)
+    nc1_inc = np.trace(Sw_inc @ inv_Sb)
 
     return {
         'acc': acc,

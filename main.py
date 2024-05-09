@@ -108,7 +108,8 @@ def main(args):
     else:
         criterion = nn.CrossEntropyLoss()
 
-    optimizer = set_optimizer(model, args, 0.9, log)
+    # optimizer = set_optimizer(model, args, 0.9, log)
+    optimizer = torch.optim.SGD(model.parameters(), momentum=0.9, lr=args.lr, weight_decay=args.wd)
     lr_scheduler = get_scheduler(args, optimizer)
 
     graphs1 = Graph_Vars()  # for training nc
@@ -204,34 +205,6 @@ def main(args):
     
     log('Finished Traning, Best TEST_ACC EP:{}/{:.4f}; Best TEST_LOSS EP:{}/{:.4f}; Best TEST_ECE EP:{}/{:.4f};'.format(
         EP_ACC, MAX_TEST_ACC, EP_LOSS, MIN_TEST_LOSS, EP_ECE, MIN_TEST_ECE))
-    
-    # plot loss
-    plot_var(graphs1.epoch, graphs1.lr, graphs2.lr, type='Learning Rate',
-                fname=os.path.join(args.output_dir, 'lr.png'))
-
-    plot_var(graphs1.epoch, graphs1.loss, graphs2.loss, type='Loss',
-                fname=os.path.join(args.output_dir, 'loss.png'))
-
-    plot_var(graphs1.epoch,
-                [100*(1-acc) for acc in graphs1.acc],
-                [100*(1-acc) for acc in graphs2.acc],
-                type='Error',
-                fname=os.path.join(args.output_dir, 'error.png'))
-
-    plot_var(graphs1.epoch, graphs1.nc1, graphs2.nc1, type='NC1',
-                fname=os.path.join(args.output_dir, 'nc1.png'))
-
-    plot_var(graphs1.epoch, graphs1.nc2_norm_h, graphs2.nc2_norm_h, z=graphs1.nc2_norm_w, type='NC2-1',
-                fname=os.path.join(args.output_dir, 'nc2_1.png'), zlabel='NC2-1 of Classifier')
-
-    plot_var(graphs1.epoch, graphs1.nc2_cos_h, graphs2.nc2_cos_h, z=graphs1.nc2_cos_w, type='NC2-2',
-                fname=os.path.join(args.output_dir, 'nc2_2.png'), zlabel='NC2-2 of Classifier')
-
-    plot_var(graphs1.epoch, graphs1.nc2_h, graphs2.nc2_h, z=graphs1.nc2_w, type='NC2',
-                fname=os.path.join(args.output_dir, 'nc2.png'), zlabel='NC2 of Classifier')
-
-    plot_var(graphs1.epoch, graphs1.nc3, graphs2.nc3, type='NC3', ylabel='||W - H||^2',
-                fname=os.path.join(args.output_dir, 'nc3.png'))
 
 
 def set_seed(SEED=666):
@@ -270,7 +243,7 @@ if __name__ == "__main__":
     parser.add_argument('--batch_size', type=int, default=128)
     parser.add_argument('--max_epochs', type=int, default=1000)
 
-    parser.add_argument('--wd', type=str, default='54')  # '54'|'01_54' | '01_54_54'
+    parser.add_argument('--wd', type=float, default=5e-4)  # '54'|'01_54' | '01_54_54'
     parser.add_argument('--koleo_wt', type=float, default=0.0)
     parser.add_argument('--koleo_type', type=str, default='d')  # d|c  default|center
     parser.add_argument('--loss', type=str, default='ce')  # ce|ls|ceh|hinge
@@ -284,14 +257,6 @@ if __name__ == "__main__":
     args.output_dir = os.path.join('/scratch/lg154/sseg/neural_collapse/result3/{}/{}/'.format(args.dset, args.model), args.exp_name)
     if args.scheduler == 'ms':
         args.scheduler = 'multi_step'
-    wds = args.wd.split('_')
-    if len(wds) == 1:
-        args.conv_wd, args.bn_wd, args.cls_wd = [float(wd[0]) / 10 ** int(wd[1]) for wd in wds] * 3
-    elif len(wds) == 2:
-        args.conv_wd, args.cls_wd = [float(wd[0]) / 10 ** int(wd[1]) for wd in wds]
-        args.bn_wd = args.conv_wd
-    elif len(wds) == 3:
-        args.conv_wd, args.bn_wd, args.cls_wd = [float(wd[0]) / 10 ** int(wd[1]) for wd in wds]
 
     if args.dset == 'cifar100':
         args.C=100

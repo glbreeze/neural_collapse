@@ -110,7 +110,7 @@ def main(args):
     else:
         criterion = nn.CrossEntropyLoss()
 
-    optimizer = set_optimizer(model, args, 0.9, log)
+    optimizer = torch.optim.SGD(model.parameters(), momentum=0.9, lr=args.lr, weight_decay=0)
     lr_scheduler = get_scheduler(args, optimizer)
 
     # =================== theoretical solution ================
@@ -254,6 +254,7 @@ if __name__ == "__main__":
     parser.add_argument('--scheduler', type=str, default='ms')  # step|ms/multi_step/cosine
     parser.add_argument('--batch_size', type=int, default=128)
     parser.add_argument('--max_epochs', type=int, default=1000)
+    parser.add_argument('--ufm', default=False, action='store_true')
 
     parser.add_argument('--wd', type=str, default='1e-3,1e-6,1e-2')  # '54'|'01_54' | '01_54_54'
     parser.add_argument('--koleo_wt', type=float, default=0.0)

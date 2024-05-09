@@ -62,14 +62,14 @@ class MLP(nn.Module):
             layers += [nn.Linear(hidden, hidden), nn.BatchNorm1d(num_features=hidden), nn.ReLU()]
 
         self.layers = nn.Sequential(*layers)
-        self.fc = nn.Linear(hidden, num_classes, bias=fc_bias)
+        self.classifier = nn.Linear(hidden, num_classes, bias=fc_bias)
         print(fc_bias)
 
     def forward(self, x, ret_feat=False):
         x = x.view(x.shape[0], -1)
         x = self.layers(x)
         features = F.normalize(x)
-        x = self.fc(x)
+        x = self.classifier(x)
         if ret_feat:
             return x, features
         else:
