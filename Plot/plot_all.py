@@ -8,8 +8,7 @@ import numpy as np
 folder = 'result'
 dset = 'cifar10'
 model = 'resnet18'
-exps = ['ms_ce_gn_b4', 'ms_ce_gn_b8_s2', 'ms_ce_gn_b16', 'ms_ce_gn_b32', 'ms_ce_gn_b64']
-# exps = ['wd54_ms_ce_b64', 'wd54_ms_ls_b64_e02', 'wd54_ms_ls_b64', 'wd54_ms_ls_b64_e08', 'wd54_ms_ls_b64_e1', 'wd54_ms_ls_b64_e2', 'wd54_ms_ls_b64_e5', 'wd54_ms_ls_b64_e8']
+exps = ['wd54_ms_ce_b64', 'wd54_ms_ls_b64_e02', 'wd54_ms_ls_b64', 'wd54_ms_ls_b64_e08', 'wd54_ms_ls_b64_e1', 'wd54_ms_ls_b64_e2', 'wd54_ms_ls_b64_e5', 'wd54_ms_ls_b64_e8']
 
 
 

@@ -3,43 +3,13 @@ import os, pickle, torch, io
 from matplotlib import pyplot as plt
 from utils import Graph_Vars
 import numpy as np
+import random
+from Plot.utils import add_headers
 
 folder = 'result'
 # ====================== utility ======================
 import random
-def add_headers(fig,*,row_headers=None,col_headers=None,row_pad=1,col_pad=5,rotate_row_headers=True,**text_kwargs):
-    # Based on https://stackoverflow.com/a/25814386
 
-    axes = fig.get_axes()
-    for ax in axes:
-        sbs = ax.get_subplotspec()
-
-        # Putting headers on cols
-        if (col_headers is not None) and sbs.is_first_row():
-            ax.annotate(
-                col_headers[sbs.colspan.start],
-                xy=(0.5, 1),
-                xytext=(0, col_pad),
-                xycoords="axes fraction",
-                textcoords="offset points",
-                ha="center",
-                va="baseline",
-                **text_kwargs,
-            )
-
-        # Putting headers on rows
-        if (row_headers is not None) and sbs.is_first_col():
-            ax.annotate(
-                row_headers[sbs.rowspan.start],
-                xy=(0, 0.5),
-                xytext=(-ax.yaxis.labelpad - row_pad, 0),
-                xycoords=ax.yaxis.label,
-                textcoords="offset points",
-                ha="right",
-                va="center",
-                rotation=rotate_row_headers * 90,
-                **text_kwargs,
-            )
 
 class CPU_Unpickler(pickle.Unpickler):
     def find_class(self, module, name):
@@ -49,7 +19,7 @@ class CPU_Unpickler(pickle.Unpickler):
             return super().find_class(module, name)
 
 
-def load_data(dset, model, exp0, exp1):
+def load_data(folder, dset, model, exp0, exp1):
 
     # statistics on training set
     fname = os.path.join(folder, '{}/{}'.format(dset, model), '{}/graph1.pickle'.format(exp0))
@@ -143,7 +113,7 @@ font_kwargs = dict(fontfamily="monospace", fontweight="bold", fontsize="large")
 add_headers(fig, col_headers=col_headers, row_headers=row_headers, **font_kwargs)
 
 
-for num, (dset, model, exp0, exp1) in enumerate([['stl10',  'resnet50', 'wd54_ms_ce_b64', 'wd54_ms_ls_b64'],
+for num, (folder, dset, model, exp0, exp1) in enumerate([['result', 'stl10',  'resnet50', 'wd54_ms_ce_b64', 'wd54_ms_ls_b64'],
                                                 ]):
     train0, train1 = load_data(dset, model, exp0, exp1)
     row = "A" if num==0 else "B"

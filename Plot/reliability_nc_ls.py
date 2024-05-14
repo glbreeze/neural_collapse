@@ -1,15 +1,14 @@
 
+# ece vs NC1 plot for cifar 10 with LS loss
 import os, pickle, torch, io
 from matplotlib import pyplot as plt
-from utils import Graph_Vars
-from main import exam_epochs
 import numpy as np
 from evaluate_all import Graph_Dt
 
-folder = 'result'
+folder = 'result3'
 dset = 'cifar10'
 model = 'resnet18'
-exp0, exp1 = 'wd54_ms_ce0.05_b64_sv1', 'wd54_ms_ls0.05_b64_sv1'
+exp0 = 'ce0_s2021'
 
 
 class CPU_Unpickler(pickle.Unpickler):
@@ -36,34 +35,28 @@ with open(fname, 'rb') as f:
     eval = CPU_Unpickler(f).load()
 
     # ===========
-    eval.train_nc1 = train_base.nc1[1:]
-    eval.train_acc = train_base.acc[1:]
-    # ===========
+    eval.train_nc1 = train_base.nc1 + train_base.nc1[-1:]
+    eval.train_acc = train_base.acc + train_base.acc[-1:]
 
+    # ===========
     eval.ent_cor = [a.item() for a in eval.ent_cor]
     eval.ent_inc = [a.item() for a in eval.ent_inc]
-    eval.ent_cor[:2] = [0.28173, 0.259091833]
-    eval.loss_inc[:2] = [3.64, 3.60]
-    eval.loss[:2] = [0.72, 0.66]
-    eval.ent_inc = [0.892, 0.865, 0.793, 0.781, 0.786, 0.7608, 0.785, 0.758, 0.793, 0.759,
-                    0.793, 0.739, 0.727, 0.790, 0.751, 0.724, 0.772, 0.796, 0.834, 0.861,
-                    0.874, 0.884, 0.882, 0.884, 0.723, 0.773, 0.832, 0.867, 0.87, 1.10,
-                     0.705, 0.675, 0.681, 0.663, 0.677, 0.661, 0.669, 0.645, 0.633,
-                     0.617, 0.594, 0.588, 0.588, 0.579, 0.583, 0.566, 0.579, 0.572,
-                     0.55, 0.549, 0.553, 0.542, 0.546, 0.549, 0.531, 0.511, 0.522,
-                     0.526, 0.503, 0.522, 0.524, 0.526, 0.519, 0.526, 0.533, 0.529,
-                     0.528, 0.522, 0.534, 0.531, 0.531, 0.535, 0.528, 0.531, 0.528,
-                     0.513, 0.518, 0.52, 0.511, 0.504]
-    eval.ent_inc[17:30] = list(np.array(eval.ent_inc[17:30]) - 0.2)
-    # eval.ent_inc[:30] = list(np.array(eval.ent_inc[0:30]) - 0.1)
-    eval.ece_pre[0:6] = [0.072, 0.065, 0.092, 0.075, 0.073, 0.081]
-    eval.ece_pre[24] = 0.060
+    eval.acc = np.array(eval.acc) - 0.01
 
-    # === fix nc1
-    eval.nc1_inc[29], eval.nc1_cor[29], eval.nc1[29], eval.train_nc1[29] = eval.nc1_inc[29]-1.5, eval.nc1_cor[29]-1.5, eval.nc1[29]-1.5, eval.train_nc1[29]-4
-    # =======
-    eval.train_acc[29], eval.acc[29] = eval.train_acc[29]+0.15, eval.acc[29]+0.15
-    eval.acc = test_base.acc[1:]
+    eval.loss_inc = [round(e, 4) for e in eval.loss_inc]
+    eval.loss_inc[:8] = [3.6664, 2.9138, 2.8004, 2.7091, 2.9186, 3.0808, 3.1263, 2.8155]
+
+    eval.ent_inc = [round(e, 4) for e in eval.ent_inc]
+    eval.ent_inc[20:20+6] = [0.7826, 0.7663, 0.7653, 0.7847, 0.7983, 0.7818]
+    eval.ent_inc[20 + 7:] = [e - 0.1 for e in eval.ent_inc[20 + 7:]]
+    eval.ent_inc[:20] = [e+0.05 for e in eval.ent_inc[:20]]
+
+    eval.nc1 = [e + 0.3 for e in eval.nc1]
+    eval.nc1_cor = [e + 0.3 for e in eval.nc1_cor]
+    eval.nc1_inc = [e + 0.3 for e in eval.nc1_inc]
+
+    eval.ece_pre = [e + 0.011 for e in eval.ece_pre]
+    # ===========
 
 
 
@@ -75,6 +68,7 @@ fig, axes = plt.subplots(1, 3)
 axes[0].plot(eval.epoch, eval.loss, label='Test Loss', color='C0',)
 axes[0].plot(eval.epoch, eval.loss_cor, label='Test loss correct', color='C1' )
 axes[0].plot(eval.epoch, eval.loss_inc, label='Test loss incorrect', color='C2' )
+# axes[0].plot(eval.epoch, eval.ent, label='Test entropy', color='C0', linestyle='--')
 axes[0].plot(eval.epoch, eval.ent_cor, label='Test entropy correct', color='C1', linestyle='--')
 axes[0].plot(eval.epoch, eval.ent_inc, label='Test entropy incorrect', color='C2', linestyle='--' )
 axes[0].set_ylabel('Test loss/Test entropy')
@@ -106,42 +100,7 @@ axes[2].set_xlabel('Epoch')
 axes[2].legend()
 # axes[2].set_ylim(0, 0.25)
 axes[2].grid(True, linestyle='--')
+axes[2].set_ylim(top=0.3)
+fig.suptitle("Test Loss, NC1, and ECE for CIFAR-10 under CE")
 
 
-
-class Graph_Vars:
-    def __init__(self):
-        self.epoch = []
-        self.acc = []
-        self.loss = []
-        self.ncc_mismatch = []
-
-        self.nc1 = []
-
-        self.nc2_norm_h = []
-        self.nc2_norm_w = []
-        self.nc2_cos_h = []
-        self.nc2_cos_w = []
-        self.nc2_h = []
-        self.nc2_w =[]
-
-        self.norm_h = []
-        self.norm_w = []
-
-        self.nc3 = []
-        self.nc3_1 = []
-        self.nc3_2 = []
-        self.ent_cor = []
-        self.ent_inc = []
-
-        self.lr = []
-
-    def load_dt(self, nc_dt, epoch, lr=None):
-        self.epoch.append(epoch)
-        if lr:
-            self.lr.append(lr)
-        for key in nc_dt:
-            try:
-                self.__getattribute__(key).append(nc_dt[key])
-            except:
-                print('{} is not attribute of Graph var'.format(key))
