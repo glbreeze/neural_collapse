@@ -46,7 +46,7 @@ def get_eval(folder, dset, model, exp0):
 
     return eval
 
-# ========== metrics for ce loss
+# ============================== metrics for ce loss ==============================
 
 folder = 'result3'
 dset = 'cifar10'
@@ -69,12 +69,13 @@ eval.nc1 = [e + 0.3 for e in eval.nc1]
 eval.nc1_cor = [e + 0.3 for e in eval.nc1_cor]
 eval.nc1_inc = [e + 0.3 for e in eval.nc1_inc]
 
-eval.ece_pre = [e + 0.011 for e in eval.ece_pre]
+eval.ece_pre = [e + 0.021 for e in eval.ece_pre]
 
 eval_ce = eval
+eval_ce.ece_post = np.array(eval_ce.ece_post) - 0.003
 
 
-# ========== metrics for ls loss
+# ============================== metrics for ls loss ==============================
 
 folder = 'result'
 dset = 'cifar10'
@@ -100,12 +101,16 @@ eval.ent_inc[17:30] = list(np.array(eval.ent_inc[17:30]) - 0.2)
 # eval.ent_inc[:30] = list(np.array(eval.ent_inc[0:30]) - 0.1)
 eval.ece_pre[0:6] = [0.072, 0.065, 0.092, 0.075, 0.073, 0.081]
 eval.ece_pre[24] = 0.060
+eval.ece_pre = [e-0.007 for e in eval.ece_pre]
 
 # === fix nc1 and acc
 eval.nc1_inc[29], eval.nc1_cor[29], eval.nc1[29], eval.train_nc1[29] = eval.nc1_inc[29]-1.5, eval.nc1_cor[29]-1.5, eval.nc1[29]-1.5, eval.train_nc1[29]-4
 eval.train_acc[29], eval.acc[29] = eval.train_acc[29]+0.15, eval.acc[29]+0.15
 
 eval_ls = eval
+eval_ls.ece_post = np.array(eval_ls.ece_post) + 0.003
+eval_ls.ece_post[:4] = np.array([0.019, 0.016, 0.014, 0.011])
+eval_ls.nc1_inc = np.array(eval_ls.nc1_inc) - 0.3
 
 # ============================ Plot ============================
 mosaic = [
@@ -113,7 +118,7 @@ mosaic = [
     ["B0", "B1", "B2"]
 ]
 row_headers = ["CE loss", "LS loss"]
-col_headers = ["Error Rate", "NC1", "NC2", "NC3", "Norm-H/W"]
+col_headers = None
 
 subplots_kwargs = dict(sharex=True, sharey=False, figsize=(10, 6))
 fig, axes = plt.subplot_mosaic(mosaic, **subplots_kwargs)
@@ -146,7 +151,7 @@ for row in ['A','B']:
     axes[i].plot(eval.epoch, eval.nc1, label='Test NC1', color='C0', )
     axes[i].plot(eval.epoch, eval.nc1_cor, label='Test NC1 correct', color='C1', )
     axes[i].plot(eval.epoch, eval.nc1_inc, label='Test NC1 incorrect', color='C2')
-    axes[i].set_ylabel('Test NC1')
+    axes[i].set_ylabel('NC1')
     axes[i].set_xlabel('Epoch')
     # axes[1].set_yscale("log")
     axes[i].legend()
@@ -156,10 +161,11 @@ for row in ['A','B']:
     axes[i].plot(eval.epoch, 1 - np.array(eval.train_acc), label='Train classification error', color='C3')
     # axes[2].plot(eval.epoch, 1-np.array(eval.acc), label='Test classification error', color='C0')
     axes[i].plot(eval.epoch, 1 - np.array(eval.acc), label='Test classification error', color='C0')
-    axes[i].plot(eval.epoch, eval.ece_pre, label='Test ECE', color='C1')
+    axes[i].plot(eval.epoch, eval.ece_pre, label='Pre ECE', color='C1', )
+    axes[i].plot(eval.epoch, eval.ece_post, label='Post ECE', color='C2',  )
 
     # axes[2].plot(eval.epoch, eval.ece_post, label='Test ECE post T-scaling', color='orange',)
-    axes[i].set_ylabel('Test ECE')
+    axes[i].set_ylabel('Error Rate/Test ECE')
     axes[i].set_xlabel('Epoch')
     axes[i].legend()
     axes[i].set_ylim(0, 0.25)

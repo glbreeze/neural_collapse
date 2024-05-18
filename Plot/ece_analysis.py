@@ -14,7 +14,7 @@ mosaic = [
 row_headers = ["CIFAR10", "CIFAR100"]
 col_headers = None # ["Test ECE", "Optimal T", "Test ECE After Temperature Scaling"]
 
-subplots_kwargs = dict(sharex=True, sharey=False, figsize=(10, 6))
+subplots_kwargs = dict(sharex=False, sharey=False, figsize=(10, 6))
 fig, axes = plt.subplot_mosaic(mosaic, **subplots_kwargs)
 
 font_kwargs = dict(fontfamily="monospace", fontweight="bold", fontsize="large")
@@ -33,16 +33,32 @@ for row in ['A', 'B']:
     axes[i].plot(df['eps'], df['p_ece'], marker='o', markersize=3, label='Pre ECE' )
     axes[i].plot(df['eps'], df['ece'], marker='o', markersize=3, label='Post ECE', color='C1')
     axes[i].set_xlabel('$\delta$')
-    axes[i].legend()
+    if row == 'A':
+        axes[i].legend()
+    axes[i].grid(True, linestyle='--')
+    axes[i].set_ylabel('ECE')
 
     i = row + '1'
-    axes[i].plot(df['eps'], df['w_norm'], marker='o', markersize=3, label='w-norm', )
-    axes[i].plot(df['eps'], df['h_norm'], marker='o',  markersize=3, label='h-norm', )
-    axes[i].plot(df['eps'], df['best_t'], marker='s', markersize=3, label='Best T',  linestyle='--')
+    line1, = axes[i].plot(df['eps'], df['h_norm'], marker='o', markersize=3, label='h-norm', color='C0')
+    line2, = axes[i].plot(df['eps'], df['w_norm'], marker='o', markersize=3, label='w-norm', color='C0', linestyle='--' )
     axes[i].set_xlabel('$\delta$')
-    axes[i].legend()
+
     if row == 'B':
         axes[i].set_ylim(0, 9)
+    axes[i].grid(True, linestyle='--')
+    axes[i].set_ylabel('w-norm/h-norm', color='C0')
+    axes[i].tick_params(axis='y', colors='C0')
+
+    ax2 = axes[i].twinx()
+    line3, = ax2.plot(df['eps'], df['best_t'], marker='s', markersize=3, label='Best T', color='C1')
+    ax2.set_ylabel('Optimal T', color='C1')
+    ax2.tick_params(axis='y', colors='C1')
+    ax2.axhline(y=1, color='C1', linestyle=':')
+
+    lines = [line1, line2, line3]
+    labels = [line.get_label() for line in lines]
+    if row=='A':
+        axes[i].legend(lines, labels)
 
 
 plt.show()
