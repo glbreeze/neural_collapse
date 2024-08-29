@@ -4,6 +4,7 @@ import numpy as np
 import torch.nn as nn
 import torch.nn.functional as F
 from scipy.sparse.linalg import svds
+import scipy
 
 
 def entropy(net_output):
@@ -38,12 +39,71 @@ def compute_W_H_relation(W, H, device):  # W:[K, 512] H:[512, K]
     return res.detach().cpu().numpy().item()
 
 
+def analysis_feat(labels, feats, args, W=None):
+    # analysis without extracting features
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    num_cls = [0 for _ in range(args.num_classes)]  # within class sample size
+    mean_cls = [0 for _ in range(args.num_classes)]
+    sse_cls = [0 for _ in range(args.num_classes)]
+    cov_cls = [0 for _ in range(args.num_classes)]
+
+    # ====== compute mean and var for each class
+    for c in range(args.num_classes):
+
+        feats_c = feats[labels == c]   # [N, 512]
+
+        num_cls[c] = len(feats_c)
+        mean_cls[c] = torch.mean(feats_c, dim=0)
+
+        # update within-class cov
+        X = feats_c - mean_cls[c].unsqueeze(0)   # [N, 512]
+        cov_cls[c] = X.T @ X / num_cls[c]        # [512, 512]
+        sse_cls[c] = X.T @ X                     # [512, 512]
+
+    # global mean
+    M = torch.stack(mean_cls)        # [K, 512]
+    mean_all = torch.mean(M, dim=0)  # [512]
+
+    Sigma_b = (M - mean_all.unsqueeze(0)).T @ (M - mean_all.unsqueeze(0)) / args.num_classes
+    Sigma_w = torch.stack([cov * num for cov, num in zip(cov_cls, num_cls)]).sum(dim=0) / sum(num_cls)
+    Sigma_t = (feats - mean_all.unsqueeze(0)).T @ (feats - mean_all.unsqueeze(0)) / len(feats)
+
+    Sigma_b = Sigma_b.cpu().numpy()
+    Sigma_w = Sigma_w.cpu().numpy()
+    nc1 = np.trace(Sigma_w @ scipy.linalg.pinv(Sigma_b))
+
+    # =========== NC2
+    nc2h = compute_ETF(M - mean_all.unsqueeze(0), device)
+    h_norm = torch.norm(M - mean_all.unsqueeze(0), dim=-1).mean().item()
+    nc2w = compute_ETF(W, device)
+    w_norm = torch.norm(W, dim=-1).mean().item()
+    nc2 = compute_W_H_relation(W, (M - mean_all.unsqueeze(0)).T, device)
+
+    # =========== NC3
+    normalized_M = (M - mean_all.unsqueeze(0)) / torch.norm(M - mean_all.unsqueeze(0), 'fro')
+    normalized_W = W / torch.norm(W, 'fro')
+    nc3d = (torch.norm(normalized_W - normalized_M) ** 2).item()
+
+    nc_dt = {
+        'nc1': nc1,
+        'nc2h': nc2h,
+        'nc2w': nc2w,
+        'nc2': nc2,
+        'nc3': nc3d,
+        'h_norm': h_norm,
+        'w_norm': w_norm,
+    }
+
+    return nc_dt
+
+
 def analysis(model, loader, args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    N = [0 for _ in range(args.C)]  # within class sample size
-    mean = [0 for _ in range(args.C)]
-    Sw_cls = [0 for _ in range(args.C)]
+    N = [0 for _ in range(args.num_classes)]  # within class sample size
+    mean = [0 for _ in range(args.num_classes)]
+    Sw_cls = [0 for _ in range(args.num_classes)]
 
     # get the logit, label, feats
     model.eval()
@@ -65,7 +125,7 @@ def analysis(model, loader, args):
     acc = (logits.argmax(dim=-1) == labels).sum().item() / len(labels)
 
     # ====== compute mean and var for each class
-    for c in range(args.C):
+    for c in range(args.num_classes):
         idxs = (labels == c).nonzero(as_tuple=True)[0]
         h_c = feats[idxs, :]  # [B, 512]
 
@@ -84,12 +144,12 @@ def analysis(model, loader, args):
 
     # between-class covariance
     M_ = M - muG  # [512, C]
-    Sb = torch.matmul(M_, M_.T) / args.C
+    Sb = torch.matmul(M_, M_.T) / args.num_classes
 
     # ============ NC1: tr{Sw Sb^-1}
     Sw = Sw.cpu().numpy()
     Sb = Sb.cpu().numpy()
-    eigvec, eigval, _ = svds(Sb, k=args.C - 1)
+    eigvec, eigval, _ = svds(Sb, k=args.num_classes - 1)
     inv_Sb = eigvec @ np.diag(eigval ** (-1)) @ eigvec.T
     nc1 = np.trace(Sw @ inv_Sb)
 
@@ -104,9 +164,9 @@ def analysis(model, loader, args):
     # mutual coherence
     def coherence(V):
         G = V.T @ V  # [C, D] [D, C]
-        G += torch.ones((args.C, args.C), device=device) / (args.C - 1)
+        G += torch.ones((args.num_classes, args.num_classes), device=device) / (args.num_classes - 1)
         G -= torch.diag(torch.diag(G))  # [C, C]
-        return torch.norm(G, 1).item() / (args.C * (args.C - 1))
+        return torch.norm(G, 1).item() / (args.num_classes * (args.num_classes - 1))
 
     cos_M = coherence(M_ / M_norms)  # [D, C]
     cos_W = coherence(W  / W_norms)

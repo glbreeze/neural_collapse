@@ -27,13 +27,10 @@ def get_scheduler(args, optimizer):
     :param batches: the number of iterations in each epochs
     :return: scheduler
     """
-
-    SCHEDULERS = {
-        'step': optim.lr_scheduler.StepLR(optimizer, step_size=args.max_epochs//10, gamma=args.lr_decay),
-        'multi_step': optim.lr_scheduler.MultiStepLR(optimizer, milestones=[150,350], gamma=0.1),
-        'cosine': optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.max_epochs),
-    }
-    return SCHEDULERS[args.scheduler]
+    if args.scheduler in ['ms', 'multi_step']:
+        return optim.lr_scheduler.MultiStepLR(optimizer, milestones=[150,300], gamma=0.1)
+    elif args.scheduler in ['cos', 'cosine']:
+        return optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.max_epochs)
 
 
 class CrossEntropyLabelSmooth(nn.Module):
@@ -208,31 +205,14 @@ def set_optimizer_b(model, args, momentum, log,):
 
 
 class Graph_Vars:
-    def __init__(self):
+    def __init__(self, dt):
         self.epoch = []
-        self.acc = []
-        self.loss = []
+        for key in dt.keys():
+            if key not in self.__dict__:
+                self.__setattr__(key, [])
 
-        self.nc1 = []
-
-        self.nc2_norm_h = []
-        self.nc2_norm_w = []
-        self.nc2_cos_h = []
-        self.nc2_cos_w = []
-        self.nc2_h = []
-        self.nc2_w =[]
-        self.nc2 = []
-        self.nc3 = []
-
-        self.h_mnorm = []
-        self.w_mnorm = []
-
-        self.lr = []
-
-    def load_dt(self, nc_dt, epoch, lr=None):
+    def load_dt(self, nc_dt, epoch):
         self.epoch.append(epoch)
-        if lr:
-            self.lr.append(lr)
         for key in nc_dt:
             try:
                 self.__getattribute__(key).append(nc_dt[key])
@@ -261,20 +241,21 @@ def print_args(args):
 
 
 def get_logits_labels_feats(data_loader, net):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logits_list = []
     labels_list = []
     feats_list = []
     net.eval()
     with torch.no_grad():
         for data, label in data_loader:
-            data = data.cuda()
+            data, label = data.to(device), label.to(device)
             logits, feats = net(data, ret_feat=True)
             logits_list.append(logits)
             labels_list.append(label)
             feats_list.append(feats)
-        logits = torch.cat(logits_list).cuda()
-        labels = torch.cat(labels_list).cuda()
-        feats = torch.cat(feats_list, dim=0).cuda()  # [N, 512]
+        logits = torch.cat(logits_list)
+        labels = torch.cat(labels_list)
+        feats = torch.cat(feats_list, dim=0) # [N, 512]
     return logits, labels, feats
 
 

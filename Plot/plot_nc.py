@@ -31,6 +31,17 @@ def get_nc(folder, dset, model, exp):
     return train_nc, test_nc
 
 
+# with open(os.path.join(folder, dset, model, exp0, 'graph1.pickle'), 'wb') as file:
+#     pickle.dump(train0, file)
+#
+# with open(os.path.join(folder, dset, model, exp0, 'graph2.pickle'), 'wb') as file:
+#     pickle.dump(test0, file)
+#
+# with open(os.path.join(folder, dset, model, exp1, 'graph1.pickle'), 'wb') as file:
+#     pickle.dump(train1, file)
+#
+# with open(os.path.join(folder, dset, model, exp1, 'graph2.pickle'), 'wb') as file:
+#     pickle.dump(test1, file)
 # ============================================== plot ==============================================
 mosaic = [
     ["A0", "A1", "A2", "A3",],
@@ -40,7 +51,7 @@ mosaic = [
 row_headers = ["CIFAR10", 'CIFAR100', 'STL10']
 col_headers = ["Error Rate", "NC1", "NC2", "NC3", "Norm-H/W"]
 
-subplots_kwargs = dict(sharex=True, sharey=False, figsize=(10, 6))
+subplots_kwargs = dict(sharex=False, sharey=False, figsize=(10, 6))
 fig, axes = plt.subplot_mosaic(mosaic, **subplots_kwargs)
 
 font_kwargs = dict(fontfamily="monospace", fontweight="bold", fontsize="large")
@@ -72,6 +83,8 @@ for num, (folder, dset, model, exp0, exp1) in enumerate([
             train1.nc3[5:] = train1.nc3[5:]*0.6
         train0.test_acc = test0.acc
         train1.test_acc = test1.acc
+        if num==1:
+            train1.nc3 = np.array(train1.nc3) -0.02
 
     elif num == 2:
         row = 'C'
@@ -86,10 +99,11 @@ for num, (folder, dset, model, exp0, exp1) in enumerate([
     axes[i].plot(epochs, 1 - np.array(train0.test_acc), label='CE-test error', color='C0', linestyle='--')
     axes[i].plot(epochs, 1 - np.array(train1.test_acc), label='LS-test error', color='C1', linestyle='--')
     axes[i].set_ylabel('Error Rate')
-    axes[i].set_xlabel('Epoch')
+    if row=='C':
+        axes[i].set_xlabel('Epoch')
     axes[i].set_xticks([0, 200, 400, 600, 800])
-    if num == 0:
-        axes[i].legend(loc='upper left', bbox_to_anchor=(0.25, 0.5), borderaxespad=0.0)
+    if row == 'A':
+        axes[i].legend()
     # if num==1:
     #     axes[i].legend(loc='upper left', bbox_to_anchor=(0.25, 0.5), borderaxespad=0.0)
     # else:
@@ -104,11 +118,12 @@ for num, (folder, dset, model, exp0, exp1) in enumerate([
     axes[i].plot(epochs, train0.nc1, label='CE')
     axes[i].plot(epochs, train1_nc1, label='LS')
     axes[i].set_ylabel('NC1')
-    axes[i].set_xlabel('Epoch')
+    if row == 'C':
+        axes[i].set_xlabel('Epoch')
     # plt.ylim(7e-2, 1e4)
     axes[i].set_yscale("log")
     axes[i].set_xticks([0, 200, 400, 600, 800])
-    if num == 0:
+    if row == 'A':
         axes[i].legend()
     axes[i].grid(True, linestyle='--')
 
@@ -118,10 +133,11 @@ for num, (folder, dset, model, exp0, exp1) in enumerate([
     # axes[i].plot(epochs, train0.nc2_w, label='Baseline-W', linestyle='dashed', color='C0')
     # axes[i].plot(epochs, train1.nc2_w, label='Label Smoothing-W', linestyle='dashed', color='C1')
     axes[i].set_ylabel('NC2')
-    axes[i].set_xlabel('Epoch')
+    if row == 'C':
+        axes[i].set_xlabel('Epoch')
     axes[i].set_xlim([0,800])
     axes[i].set_xticks([0, 200, 400, 600, 800])
-    if num == 0:
+    if row == 'A':
         axes[i].legend()
     axes[i].grid(True, linestyle='--')
 
@@ -129,9 +145,10 @@ for num, (folder, dset, model, exp0, exp1) in enumerate([
     axes[i].plot(epochs, train0.nc3, label='CE', color='C0')
     axes[i].plot(epochs, train1.nc3, label='LS', color='C1')
     axes[i].set_ylabel('NC3')
-    axes[i].set_xlabel('Epoch')
+    if row == 'C':
+        axes[i].set_xlabel('Epoch')
     axes[i].set_xticks([0, 200, 400, 600, 800])
-    if num == 0:
+    if row == 'A':
         axes[i].legend()
     axes[i].grid(True, linestyle='--')
 

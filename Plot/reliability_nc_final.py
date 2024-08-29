@@ -120,7 +120,7 @@ mosaic = [
 row_headers = ["CE loss", "LS loss"]
 col_headers = None
 
-subplots_kwargs = dict(sharex=True, sharey=False, figsize=(10, 6))
+subplots_kwargs = dict(sharex=False, sharey=False, figsize=(10, 6))
 fig, axes = plt.subplot_mosaic(mosaic, **subplots_kwargs)
 
 font_kwargs = dict(fontfamily="monospace", fontweight="bold", fontsize="large")
@@ -142,7 +142,8 @@ for row in ['A','B']:
     axes[i].plot(eval.epoch, eval.ent_inc, label='Test entropy incorrect', color='C2', linestyle='--')
     axes[i].set_ylabel('Test loss/Test entropy')
     axes[i].tick_params(axis='y')
-    axes[i].set_xlabel('Epoch')
+    if row == 'B':
+        axes[i].set_xlabel('Epoch')
     axes[i].legend()
     axes[i].grid(True, linestyle='--')
 
@@ -152,21 +153,23 @@ for row in ['A','B']:
     axes[i].plot(eval.epoch, eval.nc1_cor, label='Test NC1 correct', color='C1', )
     axes[i].plot(eval.epoch, eval.nc1_inc, label='Test NC1 incorrect', color='C2')
     axes[i].set_ylabel('NC1')
-    axes[i].set_xlabel('Epoch')
     # axes[1].set_yscale("log")
     axes[i].legend()
+    if row == 'B':
+        axes[i].set_xlabel('Epoch')
     axes[i].grid(True, linestyle='--')
 
     i = row + '2'
-    axes[i].plot(eval.epoch, 1 - np.array(eval.train_acc), label='Train classification error', color='C3')
+    axes[i].plot(eval.epoch, 1 - np.array(eval.train_acc), label='Train error', color='C3')
     # axes[2].plot(eval.epoch, 1-np.array(eval.acc), label='Test classification error', color='C0')
-    axes[i].plot(eval.epoch, 1 - np.array(eval.acc), label='Test classification error', color='C0')
+    axes[i].plot(eval.epoch, 1 - np.array(eval.acc), label='Test error', color='C0')
     axes[i].plot(eval.epoch, eval.ece_pre, label='Pre ECE', color='C1', )
     axes[i].plot(eval.epoch, eval.ece_post, label='Post ECE', color='C2',  )
 
     # axes[2].plot(eval.epoch, eval.ece_post, label='Test ECE post T-scaling', color='orange',)
     axes[i].set_ylabel('Error Rate/Test ECE')
-    axes[i].set_xlabel('Epoch')
+    if row == 'B':
+        axes[i].set_xlabel('Epoch')
     axes[i].legend()
     axes[i].set_ylim(0, 0.25)
     axes[i].grid(True, linestyle='--')

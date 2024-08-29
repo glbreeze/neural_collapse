@@ -52,8 +52,8 @@ fig, axes = plt.subplots(1, 3) # sharey=True)
 
 epochs, w_error, h_error = load_wh(0)
 
-axes[0].plot(epochs, w_error, label='Relative difference in w-norm')
-axes[0].plot(epochs, h_error, label='Relative difference in h-norm')
+axes[0].plot(epochs, w_error, label='Relative error in w-norm')
+axes[0].plot(epochs, h_error, label='Relative error in h-norm')
 axes[0].set_title('$\delta=0$')
 axes[0].set_xlabel('Epoch')
 axes[0].set_ylabel('Relative Norm Difference')
@@ -63,8 +63,8 @@ axes[0].grid(True, linestyle='--')
 
 epochs, w_error, h_error = load_wh(0.05)
 i=1
-axes[i].plot(epochs, w_error, label='Relative difference in w-norm')
-axes[i].plot(epochs, h_error, label='Relative difference in h-norm')
+axes[i].plot(epochs, w_error, label='Relative error in w-norm')
+axes[i].plot(epochs, h_error, label='Relative error in h-norm')
 axes[i].set_title('$\delta=0.05$')
 axes[i].set_xlabel('Epoch')
 axes[i].set_ylabel('Relative Norm Difference')
@@ -73,8 +73,8 @@ axes[i].grid(True, linestyle='--')
 
 epochs, w_error, h_error = load_wh(0.1)
 i=2
-axes[i].plot(epochs, w_error, label='Relative difference in w-norm')
-axes[i].plot(epochs, h_error, label='Relative difference in h-norm')
+axes[i].plot(epochs, w_error, label='Relative error in w-norm')
+axes[i].plot(epochs, h_error, label='Relative error in h-norm')
 axes[i].set_title('$\delta=0.1$')
 axes[i].set_xlabel('Epoch')
 axes[i].set_ylabel('Relative Norm Difference')
