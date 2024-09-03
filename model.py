@@ -32,6 +32,7 @@ class ResNet(nn.Module):
 
         # Isolate the classifier layer
         self.classifier = nn.Linear(resnet_model.fc.in_features, num_classes)
+        self.feat_dim = resnet_model.fc.in_features
 
         if args.ETF_fc:
             weight = torch.sqrt(torch.tensor(num_classes / (num_classes - 1))) * (

@@ -12,16 +12,20 @@
 # job info
 LOSS=$1
 EPS=$2
+KL_TYPE=$3
+KL_WT=$4
 
 # Singularity path
-ext3_path=/scratch/$USER/python36/python36.ext3
-sif_path=/scratch/work/public/singularity/cuda11.2.2-cudnn8-devel-ubuntu20.04.sif
+ext3_path=/scratch/$USER/overlay-25GB-500K.ext3
+sif_path=/scratch/lg154/cuda11.4.2-cudnn8.2.4-devel-ubuntu20.04.3.sif
 
 # start running
 singularity exec --nv \
 --overlay ${ext3_path}:ro \
 ${sif_path} /bin/bash -c "
 source /ext3/env.sh
-python main.py --dset cifar10 --model resnet18 --wd 54 --max_epochs 800 --scheduler ms --store_pt \
-     --loss ${LOSS} --eps ${EPS} --batch_size 64 --seed 2021 --exp_name wd54_ms_${LOSS}${EPS}_b64
+python main.py --dset cifar10 --model resnet18 --wd 5e-4 --scheduler ms \
+     --max_epochs 500 --batch_size 128 --lr 0.05 --log_freq 5 \
+     --koleo_type ${KL_TYPE} --koleo_wt ${KL_WT} \
+     --loss ${LOSS} --eps ${EPS}  --seed 2021 --exp_name ${LOSS}${EPS}_KL${KL_TYPE}${KL_WT}_B128
 "

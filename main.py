@@ -45,6 +45,10 @@ def train_one_epoch(model, criterion, train_loader, optimizer, args):
                 glb_mean = torch.mean(cls_mean, dim=0)
 
                 kl_loss = koleo_loss(feat-glb_mean.detach())
+            elif args.koleo_type == 'm': 
+                global GLB_mean
+                GLB_mean = args.kl_beta * GLB_mean + (1 - args.kl_beta) * torch.mean(feat.detach(), dim=0)
+                kl_loss = koleo_loss(feat-GLB_mean.detach())
             else:
                 kl_loss = koleo_loss(feat)
             loss += kl_loss * args.koleo_wt
@@ -71,6 +75,8 @@ def main(args):
     else:
         model = ResNet(pretrained=False, num_classes=args.num_classes, backbone=args.model, args=args)
     model = model.to(device)
+    global GLB_mean
+    GLB_mean = torch.zeros(model.feat_dim).to(device)
 
     if args.loss == 'ce':
         criterion = nn.CrossEntropyLoss()
@@ -94,24 +100,23 @@ def main(args):
         lr_scheduler.step()
             
         # ================= check ECE
-        logits, labels, feats = get_logits_labels_feats(test_loader, model)   # on cuda
-        val_loss = F.cross_entropy(logits, labels, reduction='mean').item()   # on cuda 
-        val_acc = (logits.argmax(dim=-1) == labels).sum().item()/len(labels)  # on cuda 
-        val_ece = ece_criterion(logits, labels).item()                        # on cuda
+        if (epoch + 1) % args.log_freq == 0 or epoch == 0:
+            logits, labels, feats = get_logits_labels_feats(test_loader, model)   # on cuda
+            val_loss = F.cross_entropy(logits, labels, reduction='mean').item()   # on cuda 
+            val_acc = (logits.argmax(dim=-1) == labels).sum().item()/len(labels)  # on cuda 
+            val_ece = ece_criterion(logits, labels).item()                        # on cuda
 
-        wandb.log({
-            'overall/lr': optimizer.param_groups[0]['lr'],
-            'overall/train_loss': train_loss.avg,
-            'overall/train_acc': train_acc.avg,
-            'overall/val_loss': val_loss,
-            'overall/val_acc': val_acc,
-            'overall/val_ece': val_ece
-            },
-            step=epoch)
+            wandb.log({
+                'overall/lr': optimizer.param_groups[0]['lr'],
+                'overall/train_loss': train_loss.avg,
+                'overall/train_acc': train_acc.avg,
+                'overall/val_loss': val_loss,
+                'overall/val_acc': val_acc,
+                'overall/val_ece': val_ece
+                },
+                step=epoch)
 
-        # ================= check NCs
-        if (epoch + 1) % args.nc_freq == 0 or epoch == 0:
-
+            # ================= check NCs
             nc_val = analysis_feat(labels, feats, args, W=model.classifier.weight.detach())
 
             logits, labels, feats = get_logits_labels_feats(train_loader, model)  # on cuda
@@ -152,7 +157,7 @@ def main(args):
                 BEST_NET = model.state_dict()
                 torch.save(BEST_NET, os.path.join(args.output_dir, "best_ece_net.pt"))
                 log('EP{} Store model (best TEST ECE) to {}'.format(epoch, os.path.join(args.output_dir, "best_ece_net.pt")))
-        if ((epoch+1) % args.save_ckpt ==0 or epoch == 0) and args.save_ckpt > 0:
+        if (args.save_ckpt > 0) and ((epoch+1) % args.save_ckpt ==0 or epoch == 0):
             torch.save(model.state_dict(), os.path.join(args.output_dir, 'ep{}.pt'.format(epoch)))
 
     # fname = os.path.join(args.output_dir, 'graph.pickle')
@@ -198,13 +203,14 @@ if __name__ == "__main__":
     parser.add_argument('--wd', type=float, default=5e-4)  # '54'|'01_54' | '01_54_54'
     parser.add_argument('--koleo_wt', type=float, default=0.0)
     parser.add_argument('--koleo_type', type=str, default='d')  # d|c  default|center
+    parser.add_argument('--kl_beta', type=float, default=0.9)  # d|c  default|center
     parser.add_argument('--loss', type=str, default='ce')  # ce|ls|ceh|hinge
     parser.add_argument('--eps', type=float, default=0.05)  # for ls loss
     parser.add_argument('--margin', type=float, default=1.0)  # for hinge loss
 
     parser.add_argument('--exp_name', type=str, default='baseline')
-    parser.add_argument('--save_ckpt', default=False, action='store_true')
-    parser.add_argument('--nc_freq', type=int, default=2)
+    parser.add_argument('--save_ckpt', type=int, default=-1)
+    parser.add_argument('--log_freq', type=int, default=2)
 
     args = parser.parse_args()
     args.output_dir = os.path.join('/scratch/lg154/sseg/neural_collapse/result/{}/{}/'.format(args.dset, args.model), args.exp_name)
@@ -227,7 +233,7 @@ if __name__ == "__main__":
     os.environ["WANDB_CACHE_DIR"] = "/scratch/lg154/sseg/.cache/wandb"
     os.environ["WANDB_CONFIG_DIR"] = "/scratch/lg154/sseg/.config/wandb"
     wandb.login(key='0c0abb4e8b5ce4ee1b1a4ef799edece5f15386ee')
-    wandb.init(project='nc3' + args.dset,
+    wandb.init(project='nc_ece',
                name=args.exp_name
                )
     wandb.config.update(args)
