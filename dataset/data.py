@@ -87,6 +87,16 @@ def get_dataloader(args):
         test_loader = torch.utils.data.DataLoader(
             datasets.FashionMNIST("data", download=True, train=False, transform=transform),
             batch_size=args.batch_size, shuffle=False)
+    
+    elif args.dset == 'mnist':
+        transform=transforms.Compose([
+                           transforms.ToTensor(),
+                           transforms.Normalize((0.1307,), (0.3081,))
+                       ])
+        trainset = datasets.MNIST(root='../dataset', train=True, download=True, transform=transform)
+        train_loader = DataLoader(trainset, batch_size=args.batch_size, shuffle=True, num_workers=4, pin_memory=True, persistent_workers=True)
+        valset = datasets.MNIST(root='../dataset', train=False, download=True, transform=transform)
+        test_loader = DataLoader(valset, batch_size=args.batch_size, shuffle=False, num_workers=4, pin_memory=True, persistent_workers=True)
 
     elif args.dset == 'tinyi': # image_size:64 x 64
         normalize = transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))

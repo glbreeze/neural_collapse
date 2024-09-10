@@ -21,7 +21,7 @@ class ResNet(nn.Module):
 
         if small_kernel:
             conv1_out_ch = resnet_model.conv1.out_channels
-            if args.dset in ['fmnist']:
+            if args.dset in ['fmnist', 'mnist']:
                 resnet_model.conv1 = nn.Conv2d(1, conv1_out_ch, kernel_size=3, stride=1, padding=1, bias=False)  # Small dataset filter size used by He et al. (2015)
             else:
                 resnet_model.conv1 = nn.Conv2d(3, conv1_out_ch, kernel_size=3, stride=1, padding=1, bias=False)  # Small dataset filter size used by He et al. (2015)
