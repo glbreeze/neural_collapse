@@ -17,17 +17,16 @@ class ModelWithTemperature(nn.Module):
         NB: Output of the neural network should be the classification logits,
             NOT the softmax (or log softmax)!
     """
+
     def __init__(self, model, log=True):
         super(ModelWithTemperature, self).__init__()
         self.model = model
         self.temperature = 1.0
         self.log = log
 
-
     def forward(self, input):
         logits = self.model(input)
         return self.temperature_scale(logits)
-
 
     def temperature_scale(self, logits):
         """
@@ -35,7 +34,6 @@ class ModelWithTemperature(nn.Module):
         """
         # Expand temperature to match the size of logits
         return logits / self.temperature
-
 
     def set_temperature(self,
                         valid_loader,
@@ -70,8 +68,7 @@ class ModelWithTemperature(nn.Module):
         ece_val = 10 ** 7
         T_opt_nll = 1.0
         T_opt_ece = 1.0
-        T = 0.1
-        for i in range(100):
+        for T in np.range(0.1, 10, 0.5):
             self.temperature = T
             self.cuda()
             after_temperature_nll = nll_criterion(self.temperature_scale(logits), labels).item()
@@ -83,7 +80,20 @@ class ModelWithTemperature(nn.Module):
             if ece_val > after_temperature_ece:
                 T_opt_ece = T
                 ece_val = after_temperature_ece
-            T += 0.1
+
+        for T in np.linspace(T_opt_ece - 0.5, T_opt_ece + 0.5, 10):
+            self.temperature = T
+            self.cuda()
+            after_temperature_ece = ece_criterion(self.temperature_scale(logits), labels).item()
+            if ece_val > after_temperature_ece:
+                T_opt_ece = T
+
+        for T in np.linspace(T_opt_ece - 0.1, T_opt_ece + 0.1, 10):
+            self.temperature = T
+            self.cuda()
+            after_temperature_ece = ece_criterion(self.temperature_scale(logits), labels).item()
+            if ece_val > after_temperature_ece:
+                T_opt_ece = T
 
         if cross_validate == 'ece':
             self.temperature = T_opt_ece
@@ -98,8 +108,7 @@ class ModelWithTemperature(nn.Module):
             print('Optimal temperature: %.3f' % self.temperature)
             print('After temperature - NLL: %.3f, ECE: %.3f' % (after_temperature_nll, after_temperature_ece))
 
-        return self
-
+        return after_temperature_ece, after_temperature_nll
 
     def get_temperature(self):
         return self.temperature

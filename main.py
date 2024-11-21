@@ -8,6 +8,7 @@ import argparse
 from nc_metric import analysis_feat
 from model import ResNet, MLP
 from dataset.data import get_dataloader
+from temperature_scaling import ModelWithTemperature
 from utils import Graph_Vars, set_log_path, log, print_args, get_scheduler, get_logits_labels_feats, AverageMeter
 from utils import CrossEntropyLabelSmooth, CrossEntropyHinge, KoLeoLoss
 
@@ -88,7 +89,9 @@ def main(args):
         criterion = nn.MultiMarginLoss(p=1, margin=args.margin, reduction="mean")
     else:
         criterion = nn.CrossEntropyLoss()
-    ece_criterion = ECELoss(n_bins=20).cuda()
+    ece_criterion15 = ECELoss(n_bins=15).cuda()
+    ece_criterion20 = ECELoss(n_bins=20).cuda()
+    ece_criterion25 = ECELoss(n_bins=25).cuda()
 
     optimizer = torch.optim.SGD(model.parameters(), momentum=0.9, lr=args.lr, weight_decay=args.wd)
     lr_scheduler = get_scheduler(args, optimizer)
@@ -103,8 +106,14 @@ def main(args):
         if (epoch + 1) % args.log_freq == 0 or epoch == 0:
             logits, labels, feats = get_logits_labels_feats(test_loader, model)   # on cuda
             val_loss = F.cross_entropy(logits, labels, reduction='mean').item()   # on cuda 
-            val_acc = (logits.argmax(dim=-1) == labels).sum().item()/len(labels)  # on cuda 
-            val_ece = ece_criterion(logits, labels).item()                        # on cuda
+            val_acc = (logits.argmax(dim=-1) == labels).sum().item()/len(labels)  # on cuda
+            val_ece15 = ece_criterion15(logits, labels).item()  # on cuda
+            val_ece20 = ece_criterion20(logits, labels).item()  # on cuda
+            val_ece25 = ece_criterion25(logits, labels).item()  # on cuda
+
+            # post process ece
+            scaled_model = ModelWithTemperature(model)
+            val_ece20_post, _ = scaled_model.set_temperature(test_loader, cross_validate='ece', n_bins=20)
 
             wandb.log({
                 'overall/lr': optimizer.param_groups[0]['lr'],
@@ -112,7 +121,11 @@ def main(args):
                 'overall/train_acc': train_acc.avg,
                 'overall/val_loss': val_loss,
                 'overall/val_acc': val_acc,
-                'overall/val_ece': val_ece
+                'ece/val_ece15': val_ece15,
+                'ece/val_ece20': val_ece20,
+                'ece/val_ece25': val_ece25,
+                'ece/val_ece20_post': val_ece20_post,
+                'ece/best_temp': ModelWithTemperature.temperature
                 },
                 step=epoch)
 
@@ -132,14 +145,14 @@ def main(args):
                 'val_nc/nc2w': nc_val['nc2w'],
             }, step=epoch)
 
-            try:
-                nc_train_all.load_dt(nc_train, epoch=epoch)
-                nc_val_all.load_dt(nc_val, epoch=epoch)
-            except:
-                nc_train_all = Graph_Vars(nc_train)
-                nc_val_all   = Graph_Vars(nc_val)
-                nc_train_all.load_dt(nc_train, epoch=epoch)
-                nc_val_all.load_dt(nc_val, epoch=epoch)
+            # try:
+            #     nc_train_all.load_dt(nc_train, epoch=epoch)
+            #     nc_val_all.load_dt(nc_val, epoch=epoch)
+            # except:
+            #     nc_train_all = Graph_Vars(nc_train)
+            #     nc_val_all   = Graph_Vars(nc_val)
+            #     nc_train_all.load_dt(nc_train, epoch=epoch)
+            #     nc_val_all.load_dt(nc_val, epoch=epoch)
         
         # ================= store the model
         if (val_acc > MAX_TEST_ACC and epoch >= 100) and args.save_ckpt > 0:
@@ -152,17 +165,13 @@ def main(args):
                 BEST_NET = model.state_dict()
                 torch.save(BEST_NET, os.path.join(args.output_dir, "best_loss_net.pt"))
                 log('EP{} Store model (best TEST LOSS) to {}'.format(epoch, os.path.join(args.output_dir, "best_loss_net.pt")))
-        if (val_ece < MIN_TEST_ECE and epoch >= 100) and args.save_ckpt > 0:
-                MIN_TEST_ECE = val_ece
+        if (val_ece20 < MIN_TEST_ECE and epoch >= 100) and args.save_ckpt > 0:
+                MIN_TEST_ECE = val_ece20
                 BEST_NET = model.state_dict()
                 torch.save(BEST_NET, os.path.join(args.output_dir, "best_ece_net.pt"))
                 log('EP{} Store model (best TEST ECE) to {}'.format(epoch, os.path.join(args.output_dir, "best_ece_net.pt")))
         if (args.save_ckpt > 0) and ((epoch+1) % args.save_ckpt ==0 or epoch == 0):
             torch.save(model.state_dict(), os.path.join(args.output_dir, 'ep{}.pt'.format(epoch)))
-
-    # fname = os.path.join(args.output_dir, 'graph.pickle')
-    # with open(fname, 'wb') as f:
-    #     pickle.dump([nc_train_all, nc_val_all], f)
 
 
 def set_seed(SEED=666):
@@ -182,8 +191,9 @@ if __name__ == "__main__":
     parser.add_argument('--model', type=str, default='resnet18')
     parser.add_argument('--ETF_fc', action='store_true', default=False)
 
+    # aug
+    parser.add_argument('--aug', type=str, default='null')
     # not needed
-    parser.add_argument('--test_ood', action='store_true', default=False)
     parser.add_argument('--min_scale', type=float, default=0.2)  # scale for MoCo Aug
 
     # dataset parameters of CIFAR10
@@ -219,6 +229,8 @@ if __name__ == "__main__":
         args.num_classes=100
     elif args.dset == 'tinyi':
         args.num_classes=200
+    elif args.dset == 'cifar10':
+        args.num_classes = 10
 
     set_seed(SEED=args.seed)
 
