@@ -64,6 +64,8 @@ def analysis_feat(labels, feats, args, W=None):
     # global mean
     M = torch.stack(mean_cls)        # [K, 512]
     mean_all = torch.mean(M, dim=0)  # [512]
+    h_norm = torch.norm(M - mean_all.unsqueeze(0), dim=-1).mean().item()
+    w_norm = torch.norm(W, dim=-1).mean().item()
 
     Sigma_b = (M - mean_all.unsqueeze(0)).T @ (M - mean_all.unsqueeze(0)) / args.num_classes
     Sigma_w = torch.stack([cov * num for cov, num in zip(cov_cls, num_cls)]).sum(dim=0) / sum(num_cls)
@@ -72,12 +74,12 @@ def analysis_feat(labels, feats, args, W=None):
     Sigma_b = Sigma_b.cpu().numpy()
     Sigma_w = Sigma_w.cpu().numpy()
     nc1 = np.trace(Sigma_w @ scipy.linalg.pinv(Sigma_b))
+    nc1_cls = [np.trace(cov.cpu().numpy() @ scipy.linalg.pinv(Sigma_b)) for cov in cov_cls]
+    var_cls = [np.trace(cov.cpu().numpy() / h_norm**2) for cov in cov_cls]
 
     # =========== NC2
     nc2h = compute_ETF(M - mean_all.unsqueeze(0), device)
-    h_norm = torch.norm(M - mean_all.unsqueeze(0), dim=-1).mean().item()
     nc2w = compute_ETF(W, device)
-    w_norm = torch.norm(W, dim=-1).mean().item()
     nc2 = compute_W_H_relation(W, (M - mean_all.unsqueeze(0)).T, device)
 
     # =========== NC3
@@ -93,6 +95,8 @@ def analysis_feat(labels, feats, args, W=None):
         'nc3': nc3d,
         'h_norm': h_norm,
         'w_norm': w_norm,
+        'nc1_cls': nc1_cls, 
+        'var_cls': var_cls
     }
 
     return nc_dt

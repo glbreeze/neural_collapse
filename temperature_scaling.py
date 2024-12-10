@@ -6,7 +6,7 @@ import numpy as np
 from torch import nn, optim
 from torch.nn import functional as F
 
-from metrics import ECELoss
+from metrics import ECELoss, AdaptiveECELoss
 
 
 class ModelWithTemperature(nn.Module):
@@ -37,14 +37,17 @@ class ModelWithTemperature(nn.Module):
 
     def set_temperature(self,
                         valid_loader,
-                        cross_validate='ece', n_bins=15):
+                        cross_validate='ece', n_bins=15, ece_type='ece'):
         """
         Tune the tempearature of the model (using the validation set) with cross-validation on ECE or NLL
         """
         self.cuda()
         self.model.eval()
         nll_criterion = nn.CrossEntropyLoss().cuda()
-        ece_criterion = ECELoss(n_bins=n_bins).cuda()
+        if ece_type == 'ece':
+            ece_criterion = ECELoss(n_bins=n_bins).cuda()
+        elif ece_type == 'adaece': 
+            ece_criterion = AdaptiveECELoss(n_bins=n_bins).cuda()
 
         # First: collect all the logits and labels for the validation set
         logits_list = []
@@ -68,7 +71,7 @@ class ModelWithTemperature(nn.Module):
         ece_val = 10 ** 7
         T_opt_nll = 1.0
         T_opt_ece = 1.0
-        for T in np.range(0.1, 10, 0.5):
+        for T in np.arange(0.1, 10, 0.5):
             self.temperature = T
             self.cuda()
             after_temperature_nll = nll_criterion(self.temperature_scale(logits), labels).item()
@@ -87,6 +90,7 @@ class ModelWithTemperature(nn.Module):
             after_temperature_ece = ece_criterion(self.temperature_scale(logits), labels).item()
             if ece_val > after_temperature_ece:
                 T_opt_ece = T
+                ece_val = after_temperature_ece
 
         for T in np.linspace(T_opt_ece - 0.1, T_opt_ece + 0.1, 10):
             self.temperature = T
@@ -94,6 +98,7 @@ class ModelWithTemperature(nn.Module):
             after_temperature_ece = ece_criterion(self.temperature_scale(logits), labels).item()
             if ece_val > after_temperature_ece:
                 T_opt_ece = T
+                ece_val = after_temperature_ece
 
         if cross_validate == 'ece':
             self.temperature = T_opt_ece

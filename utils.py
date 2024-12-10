@@ -28,7 +28,7 @@ def get_scheduler(args, optimizer):
     :return: scheduler
     """
     if args.scheduler in ['ms', 'multi_step']:
-        return optim.lr_scheduler.MultiStepLR(optimizer, milestones=[150,300], gamma=0.1)
+        return optim.lr_scheduler.MultiStepLR(optimizer, milestones=[150], gamma=0.1)
     elif args.scheduler in ['cos', 'cosine']:
         return optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.max_epochs)
 
@@ -68,6 +68,34 @@ class CrossEntropyLabelSmooth(nn.Module):
         else:
             return loss
         return loss
+    
+
+class FocalLoss(nn.Module):
+    def __init__(self, gamma=0, reduction=True):
+        super(FocalLoss, self).__init__()
+        self.gamma = gamma
+        self.reduction = reduction
+
+    def forward(self, input, target):
+        """
+        Args:
+            inputs: prediction matrix (before softmax) with shape (batch_size, num_classes)
+            targets: ground truth labels with shape (batch_size)
+        """
+        if input.dim()>2:
+            input = input.view(input.size(0),input.size(1),-1)  # N,C,H,W => N,C,H*W
+            input = input.transpose(1,2)    # N,C,H*W => N,H*W,C
+            input = input.contiguous().view(-1,input.size(2))   # N,H*W,C => N*H*W,C
+        target = target.view(-1,1)
+
+        logpt = F.log_softmax(input)
+        logpt = logpt.gather(1,target)
+        logpt = logpt.view(-1)
+        pt = logpt.exp()
+
+        loss = -1 * (1-pt)**self.gamma * logpt
+        if self.reduction: return loss.mean()
+        else: return loss.sum()
 
 
 class CrossEntropyHinge(nn.Module):
@@ -115,9 +143,10 @@ class CrossEntropyHinge(nn.Module):
 class KoLeoLoss(nn.Module):
     """Kozachenko-Leonenko entropic loss regularizer from Sablayrolles et al. - 2018 - Spreading vectors for similarity search"""
 
-    def __init__(self):
+    def __init__(self, type='d'):
         super().__init__()
         self.pdist = nn.PairwiseDistance(2, eps=1e-8)
+        self.type=type
 
     def pairwise_NNs_inner(self, x):
         """
@@ -132,7 +161,7 @@ class KoLeoLoss(nn.Module):
         _, I = torch.max(dots, dim=1)  # noqa: E741
         return I
 
-    def forward(self, output, eps=1e-8):
+    def _forward_base(self, output, eps=1e-8, labels=None, cls_weight=None):
         """
         Args:
             output (BxD): backbone output of student
@@ -141,7 +170,50 @@ class KoLeoLoss(nn.Module):
             output = F.normalize(output, eps=eps, p=2, dim=-1)
             I = self.pairwise_NNs_inner(output)  # noqa: E741
             distances = self.pdist(output, output[I])  # BxD, BxD -> B
-            loss = -torch.log(distances + eps).mean()
+            loss = -torch.log(distances + eps)
+            if cls_weight is not None: 
+                loss = loss * cls_weight[labels]
+        return loss.mean()
+    
+    def _forward_dist(self, output, cls_mean, labels, eps=1e-8, cls_weight=None):
+        normalized_feat = F.normalize(output, p=2, eps=1e-8, dim=-1)  # output is already recentered by global mean
+        normalized_cls_mean = F.normalize(cls_mean, p=2, eps=1e-8, dim=-1)
+
+        if self.type == 'cs':
+            cosine_similarities = torch.matmul(normalized_feat, normalized_cls_mean.T)
+            class_cosine_similarities = cosine_similarities.gather(1, labels.unsqueeze(1))
+            distances = 1 - class_cosine_similarities.squeeze()
+            loss = -torch.log(distances + eps)
+            if cls_weight is not None: 
+                loss = loss * cls_weight[labels]
+            return loss.mean()
+        
+        elif self.type == 'l1':
+            distances = torch.abs(normalized_feat - normalized_cls_mean[labels]).sum(dim=1)
+            loss = - distances
+            if cls_weight is not None: 
+                loss = loss * cls_weight[labels]
+            return loss.mean()
+        
+        elif self.type == 'l2':
+            distances = torch.norm(normalized_feat - normalized_cls_mean[labels], p=2, dim=1)
+            loss = 1 - distances
+            if cls_weight is not None: 
+                loss = loss * cls_weight[labels]
+            return loss.mean()
+        
+        elif self.type == 'd2':
+            distances = torch.norm(normalized_feat - normalized_cls_mean[labels], p=2, dim=1)
+            loss = 1 - (distances**2)
+            if cls_weight is not None: 
+                loss = loss * cls_weight[labels]
+            return loss.mean()
+
+    def forward(self, output, cls_mean=None, labels=None, eps=1e-8, cls_weight=None): 
+        if self.type in ['d', 'm', 'c']: 
+            loss = self._forward_base(output, eps=eps, labels=labels, cls_weight=cls_weight)
+        elif self.type in ['l1', 'l2', 'cs', 'd2']: 
+            loss = self._forward_dist(output, cls_mean=cls_mean, labels=labels, eps=eps, cls_weight=cls_weight)
         return loss
 
 
