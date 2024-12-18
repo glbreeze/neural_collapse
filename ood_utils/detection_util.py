@@ -150,10 +150,8 @@ def get_mean_prec(args, net, train_loader):
     used for Mahalanobis score. Calculate class-wise mean and inverse covariance matrix
     '''
     classwise_mean = torch.empty(args.n_cls, args.feat_dim, device =args.gpu)
-    all_features = []
-    # classwise_features = []
-    from collections import defaultdict
-    classwise_idx = defaultdict(list)
+    all_features, all_labels = [], []
+
     with torch.no_grad():
         for idx, (images, labels) in enumerate(tqdm(train_loader)):
             images = images.cuda()
@@ -161,20 +159,161 @@ def get_mean_prec(args, net, train_loader):
                 features = net.get_image_features(pixel_values = images).float()
             if args.normalize: 
                 features /= features.norm(dim=-1, keepdim=True)
-            for label in labels:
-                classwise_idx[label.item()].append(idx)
+                
             all_features.append(features.cpu()) #for vit
+            all_labels.append(labels)
     all_features = torch.cat(all_features)
+    all_labels = torch.cat(all_labels)
+    
     for cls in range(args.n_cls):
-        classwise_mean[cls] = torch.mean(all_features[classwise_idx[cls]].float(), dim = 0)
+        classwise_mean[cls] = torch.mean(all_features[all_labels == cls].float(), dim = 0)
         if args.normalize: 
             classwise_mean[cls] /= classwise_mean[cls].norm(dim=-1, keepdim=True)
     cov = torch.cov(all_features.T.double()) 
     precision = torch.linalg.inv(cov).float()
+   
     print(f'cond number: {torch.linalg.cond(precision)}')
     torch.save(classwise_mean, os.path.join(args.template_dir,f'{args.model}_classwise_mean_{args.in_dataset}_{args.max_count}_{args.normalize}.pt'))
     torch.save(precision, os.path.join(args.template_dir,f'{args.model}_precision_{args.in_dataset}_{args.max_count}_{args.normalize}.pt'))
     return classwise_mean, precision
+
+
+def get_mean_cov(args, net, train_loader):
+    '''
+    used for Mahalanobis score. Calculate class-wise mean and inverse covariance matrix
+    '''
+    device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+    all_features, all_labels = [], []
+    with torch.no_grad():
+        for idx, (images, labels) in enumerate(tqdm(train_loader)):
+            images, labels = images.to(device), labels.to(device)
+            if args.model == 'CLIP': 
+                features = net.get_image_features(pixel_values = images).float()
+            if args.normalize: 
+                features /= features.norm(dim=-1, keepdim=True)
+            all_features.append(features) #for vit
+            all_labels.append(labels)
+    feats = torch.cat(all_features)
+    labels = torch.cat(all_labels)
+    
+    num_cls = [0 for _ in range(args.n_cls)]  # within class sample size
+    mean_cls = [0 for _ in range(args.n_cls)]
+    cov_cls = [0 for _ in range(args.n_cls)]
+
+    # ====== compute mean and var for each class
+    for c in range(args.n_cls):
+
+        feats_c = feats[labels == c]   # [N, 512]
+        num_cls[c] = len(feats_c)
+        mean_cls[c] = torch.mean(feats_c, dim=0)  # [512]
+        # update within-class cov
+        
+        if args.normalize: 
+            mean_cls[c] /= mean_cls[c].norm(dim=-1, keepdim=True) # [1, 512]
+            cos_similarity = torch.matmul(feats_c, mean_cls[c])   # [N]
+            cos_dist = 1 - cos_similarity                         # [N]
+            cov_cls[c] = torch.var(cos_dist, unbiased=False)      # [1]
+        else:
+            X = feats_c - mean_cls[c].unsqueeze(0)    # [N, 512]
+            cov_cls[c] = X.T @ X / num_cls[c]         # [512, 512]
+    
+    return mean_cls, cov_cls
+
+
+def get_my_score(args, net, test_loader, classwise_mean, classwise_var, in_dist = True, epsilon=1e-6):
+    '''
+    Compute the proposed Mahalanobis confidence score on input dataset
+    '''
+    device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+    # net.eval()
+    my_score_all = []
+    total_len = len(test_loader.dataset)
+    tqdm_object = tqdm(test_loader, total=len(test_loader))
+    with torch.no_grad():
+        for batch_idx, (images, labels) in enumerate(tqdm_object):
+            if (batch_idx >= total_len // args.batch_size) and in_dist is False:
+                break   
+            images, labels = images.to(device), labels.to(device)
+            if args.model == 'CLIP':
+                features = net.get_image_features(pixel_values = images).float()
+            
+            if args.normalize: 
+                class_mean = torch.cat([mean_c.view(1, -1) for mean_c in classwise_mean], dim=0)  # [K, d]
+                class_var = torch.cat([var_c.view(-1) for var_c in classwise_var], dim=0)         # [K]   
+                 
+                features /= features.norm(dim=-1, keepdim=True)         # [B, d]
+                cos_similarity = torch.matmul(features, class_mean.T)   # [B, K]
+                cos_dist = 1 - cos_similarity                           # [B, K]
+                my_score = - cos_dist / torch.sqrt(class_var)           # [B, K]
+            
+            else:
+                for i in range(args.n_cls):
+                    class_mean = classwise_mean[i].cuda()
+                    class_var = classwise_var[i].cuda()
+                    regularized_class_var = class_var + epsilon * torch.eye(class_var.shape[0], device=class_var.device)
+                    
+                    zero_f = features - class_mean
+                    my_dist = -0.5*torch.mm(torch.mm(zero_f, torch.linalg.inv(regularized_class_var.double()).float()), zero_f.t()).diag() # [B]
+                    if i == 0:
+                        my_score = my_dist.view(-1,1)
+                    else:
+                        my_score = torch.cat((my_score, my_dist.view(-1,1)), 1)   # [B, K]
+                    
+            my_score, _ = torch.max(my_score, dim=1)
+            my_score_all.extend(-my_score.cpu().numpy())
+        
+    return np.asarray(my_score_all, dtype=np.float32)
+
+
+def get_mean_cov_it(args, net, train_loader):
+    '''
+    used for Mahalanobis score. Calculate class-wise mean and inverse covariance matrix
+    '''
+    device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+    all_features, all_labels = [], []
+    with torch.no_grad():
+        for idx, (images, labels) in enumerate(tqdm(train_loader)):
+            images, labels = images.to(device), labels.to(device)
+            if args.model == 'CLIP': 
+                features = net.get_image_features(pixel_values = images).float()
+            if args.normalize: 
+                features /= features.norm(dim=-1, keepdim=True)
+            all_features.append(features) #for vit
+            all_labels.append(labels)
+    feats = torch.cat(all_features)
+    labels = torch.cat(all_labels)
+    
+     # ====== compute the center of the text encoder
+    class_names = train_loader.dataset.class_names_str
+    prompts = [f"a photo of {class_name}" for class_name in class_names]
+    t_cls = net.get_text_features(
+        input_ids=net.processor.tokenizer(prompts, return_tensors="pt", padding=True).input_ids.cuda()
+    )
+    t_cls = t_cls / t_cls.norm(dim=-1, keepdim=True)
+    
+    num_cls = [0 for _ in range(args.n_cls)]  # within class sample size
+    mean_cls = [0 for _ in range(args.n_cls)]
+    cov_cls = [0 for _ in range(args.n_cls)]
+
+    # ====== compute mean and var for each class
+    for c in range(args.n_cls):
+
+        feats_c = feats[labels == c]   # [N, 512]
+        num_cls[c] = len(feats_c)
+        mean_cls[c] = torch.mean(feats_c, dim=0)  # [512]
+        # update within-class cov
+        
+        if args.normalize: 
+            mean_cls[c] /= mean_cls[c].norm(dim=-1, keepdim=True) # [1, 512]
+            cos_similarity = torch.matmul(feats_c, mean_cls[c])   # [N]
+            cos_dist = 1 - cos_similarity                         # [N]
+            cov_cls[c] = torch.var(cos_dist, unbiased=False)      # [1]
+        else:
+            X = feats_c - mean_cls[c].unsqueeze(0)    # [N, 512]
+            cov_cls[c] = X.T @ X / num_cls[c]         # [512, 512]
+    
+    return mean_cls, cov_cls
+
 
 def get_Mahalanobis_score(args, net, test_loader, classwise_mean, precision, in_dist = True):
     '''
@@ -263,6 +402,7 @@ def get_and_print_results(args, log, in_score, out_score, auroc_list, aupr_list,
     auroc = np.mean(aurocs); aupr = np.mean(auprs); fpr = np.mean(fprs)
     auroc_list.append(auroc); aupr_list.append(aupr); fpr_list.append(fpr) # used to calculate the avg over multiple OOD test sets
     print_measures(log, auroc, aupr, fpr, args.score)
+    return auroc, aupr, fpr
 
 class TextDataset(torch.utils.data.Dataset):
     '''

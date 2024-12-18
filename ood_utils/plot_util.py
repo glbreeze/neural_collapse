@@ -11,8 +11,19 @@ import torch.nn.functional as F
 def plot_distribution(args, id_scores, ood_scores, out_dataset):
     sns.set(style="white", palette="muted")
     palette = ['#A8BAE3', '#55AB83']
-    sns.displot({"ID":-1 * id_scores, "OOD": -1 * ood_scores}, label="id", kind = "kde", palette=palette, fill = True, alpha = 0.8)
-    plt.savefig(os.path.join(args.log_directory,f"{args.score}_{out_dataset}.png"), bbox_inches='tight')
+    
+    sns.displot(
+        {"ID": -1 * id_scores, "OOD": -1 * ood_scores},
+        label="id",
+        kind="kde",
+        palette=palette,
+        fill=True,
+        alpha=0.8
+    )
+    
+    plot_path = f"{args.score}_{out_dataset}.png"
+    plt.savefig(plot_path, bbox_inches='tight')
+    return plot_path
 
 def show_values_on_bars(axs):
     def _show_on_single_plot(ax):        
