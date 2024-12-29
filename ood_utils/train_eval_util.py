@@ -5,8 +5,9 @@ import numpy as np
 import torch
 import torchvision
 from torch import nn
+from collections import defaultdict
 import torch.nn.functional as F
-from transformers import CLIPModel
+from transformers import CLIPModel, CLIPProcessor
 from torchvision import datasets, transforms
 import torchvision.transforms as transforms
 from dataloaders import StanfordCars, Food101, OxfordIIITPet, Cub2011
@@ -21,6 +22,7 @@ def set_model_clip(args):
                     "ViT-L/14":"openai/clip-vit-large-patch14"}
     args.ckpt = ckpt_mapping[args.CLIP_ckpt]
     model =  CLIPModel.from_pretrained(args.ckpt)
+    processor = CLIPProcessor.from_pretrained(args.ckpt)
     if args.model == 'CLIP-Linear':
         model.load_state_dict(torch.load(args.finetune_ckpt, map_location=torch.device(args.gpu)))
     model = model.cuda()
@@ -33,28 +35,27 @@ def set_model_clip(args):
             normalize
         ])
     
-    return model, val_preprocess
+    return model, val_preprocess, processor
 
-def set_train_loader(args, preprocess=None, batch_size=None, shuffle=False, subset=False):
+
+def set_train_loader(args, preprocess=None, shuffle=False, subset=False):
     root = args.root_dir
     if preprocess == None:
         normalize = transforms.Normalize(mean=(0.48145466, 0.4578275, 0.40821073),
                                          std=(0.26862954, 0.26130258, 0.27577711))  # for CLIP
+
         preprocess = transforms.Compose([
-            transforms.RandomCrop(32, padding=4),
-            transforms.RandomHorizontalFlip(),
-            transforms.ToTensor(),
-            normalize
+            transforms.Resize(224, interpolation=transforms.InterpolationMode.BICUBIC), # Resize to 224x224
+            transforms.CenterCrop(224),                                                 # Center crop
+            transforms.ToTensor(),                                                      # Convert to tensor
+            normalize,
         ])
     kwargs = {'num_workers': 4, 'pin_memory': True}
-    if batch_size is None:  # normal case: used for trainign
-        batch_size = args.batch_size
-        shuffle = True
+
     if args.in_dataset == "ImageNet":
         path = os.path.join(root, 'ImageNet', 'train')
         dataset = datasets.ImageFolder(path, transform=preprocess)
         if subset:
-            from collections import defaultdict
             classwise_count = defaultdict(int)
             indices = []
             for i, label in enumerate(dataset.targets):
@@ -62,25 +63,32 @@ def set_train_loader(args, preprocess=None, batch_size=None, shuffle=False, subs
                     indices.append(i)
                     classwise_count[label] += 1
             dataset = torch.utils.data.Subset(dataset, indices)
-        train_loader = torch.utils.data.DataLoader(dataset,
-                                                   batch_size=batch_size, shuffle=shuffle, **kwargs)
+        train_loader = torch.utils.data.DataLoader(dataset, batch_size=args.batch_size, shuffle=shuffle, **kwargs)
     elif args.in_dataset in ["ImageNet10", "ImageNet20", "ImageNet100"]:
-        train_loader = torch.utils.data.DataLoader(
-            datasets.ImageFolder(os.path.join(
-                root, args.in_dataset, 'train'), transform=preprocess),
-            batch_size=batch_size, shuffle=shuffle, **kwargs)
+        dataset = datasets.ImageFolder(os.path.join(root, args.in_dataset, 'train'), transform=preprocess)
+        if subset: 
+            classwise_count = defaultdict(int)
+            indices = []
+            
+            for i, label in enumerate(dataset.targets):
+                if classwise_count[label] < args.max_count:
+                    indices.append(i)
+                    classwise_count[label] += 1
+            dataset = torch.utils.data.Subset(dataset, indices)
+        train_loader = torch.utils.data.DataLoader(dataset, batch_size=args.batch_size, shuffle=shuffle, **kwargs)
+        
     elif args.in_dataset == "car196":
         train_loader = torch.utils.data.DataLoader(StanfordCars(root, split="train", download=True, transform=preprocess),
-                                                   batch_size=batch_size, shuffle=shuffle, **kwargs)
+                                                   batch_size=args.batch_size, shuffle=shuffle, **kwargs)
     elif args.in_dataset == "food101":
         train_loader = torch.utils.data.DataLoader(Food101(root, split="train", download=True, transform=preprocess),
-                                                   batch_size=batch_size, shuffle=shuffle, **kwargs)
+                                                   batch_size=args.batch_size, shuffle=shuffle, **kwargs)
     elif args.in_dataset == "pet37":
         train_loader = torch.utils.data.DataLoader(OxfordIIITPet(root, split="trainval", download=True, transform=preprocess),
-                                                   batch_size=batch_size, shuffle=shuffle, **kwargs)
+                                                   batch_size=args.batch_size, shuffle=shuffle, **kwargs)
     elif args.in_dataset == "bird200":
         train_loader = torch.utils.data.DataLoader(Cub2011(root, train = True, transform=preprocess),
-                    batch_size=batch_size, shuffle=shuffle, **kwargs)
+                    batch_size=args.batch_size, shuffle=shuffle, **kwargs)
     return train_loader
 
 
@@ -101,8 +109,7 @@ def set_val_loader(args, preprocess=None):
             batch_size=args.batch_size, shuffle=False, **kwargs)
     elif args.in_dataset in ["ImageNet10", "ImageNet20", "ImageNet100"]:
         val_loader = torch.utils.data.DataLoader(
-            datasets.ImageFolder(os.path.join(
-                root, args.in_dataset, 'val'), transform=preprocess),
+            datasets.ImageFolder(os.path.join(root, args.in_dataset, 'val'), transform=preprocess),
             batch_size=args.batch_size, shuffle=False, **kwargs)
     elif args.in_dataset == "car196":
         val_loader = torch.utils.data.DataLoader(StanfordCars(root, split="test", download=True, transform=preprocess),
@@ -120,7 +127,7 @@ def set_val_loader(args, preprocess=None):
     return val_loader
 
 
-def set_ood_loader_ImageNet(args, out_dataset, preprocess, root):
+def set_ood_loader_ImageNet(args, out_dataset, preprocess, root, subset=False):
     '''
     set OOD loader for ImageNet scale datasets
     '''
@@ -141,7 +148,17 @@ def set_ood_loader_ImageNet(args, out_dataset, preprocess, root):
         testsetout = datasets.ImageFolder(os.path.join(args.root_dir, 'ImageNet10', 'train'), transform=preprocess)
     elif out_dataset == 'ImageNet20':
         testsetout = datasets.ImageFolder(os.path.join(args.root_dir, 'ImageNet20', 'val'), transform=preprocess)
-    testloaderOut = torch.utils.data.DataLoader(testsetout, batch_size=args.batch_size,
-                                            shuffle=False, num_workers=4)
+    
+    if subset: 
+            classwise_count = defaultdict(int)
+            indices = []
+            
+            for i, label in enumerate(testsetout.targets):
+                if classwise_count[label] < args.max_count:
+                    indices.append(i)
+                    classwise_count[label] += 1
+            testsetout = torch.utils.data.Subset(testsetout, indices)
+        
+    testloaderOut = torch.utils.data.DataLoader(testsetout, batch_size=args.batch_size,shuffle=False, num_workers=4)
     return testloaderOut
 

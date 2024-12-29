@@ -1,4 +1,5 @@
 import os
+import json
 import wandb
 import argparse
 import numpy as np
@@ -6,7 +7,7 @@ import torch
 from scipy import stats
 
 from ood_utils.common import setup_seed, get_num_cls, get_test_labels
-from ood_utils.detection_util import get_Mahalanobis_score, get_mean_prec, print_measures, get_and_print_results, get_ood_scores_clip, get_mean_cov, get_my_score
+from ood_utils.detection_util import get_Mahalanobis_score, get_mean_prec, get_and_print_results, get_mean_cov_it, get_feat_labels, get_measures 
 from ood_utils.file_ops import save_as_dataframe, setup_log
 from ood_utils.plot_util import plot_distribution
 from ood_utils.train_eval_util import  set_model_clip, set_train_loader, set_val_loader, set_ood_loader_ImageNet
@@ -28,6 +29,9 @@ def process_args():
     parser.add_argument('--model', default='CLIP', type=str, help='model architecture')
     parser.add_argument('--CLIP_ckpt', type=str, default='ViT-B/16', choices=['ViT-B/32', 'ViT-B/16', 'ViT-L/14'], help='which pretrained img encoder to use')
     parser.add_argument('--score', default='MCM', type=str, choices=['MCM', 'energy', 'max-logit', 'entropy', 'var', 'maha'], help='score options')
+    
+    # for new image to text embedding distance 
+    parser.add_argument('--text_embed', type=str, default='default', help='which text embed to compare to')  # default | mean | min
 
     # for Mahalanobis score
     parser.add_argument('--feat_dim', type=int, default=512, help='feat dim； 512 for ViT-B and 768 for ViT-L')
@@ -35,7 +39,7 @@ def process_args():
     parser.add_argument('--generate', type = bool, default = True, help='whether to generate class-wise means or read from files for Maha score')
     parser.add_argument('--template_dir', type = str, default = 'img_templates', help='the loc of stored classwise mean and precision matrix')
     parser.add_argument('--subset', default = False, type =bool, help = "whether uses a subset of samples in the training set")
-    parser.add_argument('--max_count', default = 250, type =int, help = "how many samples are used to estimate classwise mean and precision matrix")
+    parser.add_argument('--max_count', default = 100, type =int, help = "how many samples are used to estimate classwise mean and precision matrix")
     args = parser.parse_args()
 
     args.n_cls = get_num_cls(args)
@@ -50,6 +54,7 @@ def main():
     log = setup_log(args)
     assert torch.cuda.is_available()
     torch.cuda.set_device(args.gpu)
+    device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
     
     
     os.environ["WANDB_API_KEY"] = "0c0abb4e8b5ce4ee1b1a4ef799edece5f15386ee"
@@ -60,8 +65,11 @@ def main():
     wandb.init(project='lg_ood', name=args.name)
     wandb.config.update(args)
 
-    net, preprocess = set_model_clip(args)
+    net, img_preprocess, processor = set_model_clip(args)
     net.eval()
+    
+    def collate_fn(batch):
+        return processor(images=batch, return_tensors="pt").pixel_values
 
     if args.in_dataset in ['ImageNet10']:
         out_datasets = ['ImageNet20']
@@ -69,67 +77,84 @@ def main():
         out_datasets = ['ImageNet10']
     elif args.in_dataset in [ 'ImageNet', 'ImageNet100', 'bird200', 'car196', 'food101', 'pet37']:
          out_datasets = ['iNaturalist'] #,'SUN', 'places365', 'dtd']
-    test_loader = set_val_loader(args, preprocess)    # in_data
-    test_labels = get_test_labels(args, test_loader)
     
+    # ========== ID features 
+    train_loader = set_train_loader(args, img_preprocess, subset = args.subset)
+    id_feats, id_labels = get_feat_labels(train_loader, net, device, args)
     
-    train_loader = set_train_loader(args, preprocess, subset = args.subset)
-    mean_cls, cov_cls = get_mean_cov(args, net, train_loader)
-    if args.normalize: 
-        sigma_cls = [cov.item() for cov in cov_cls]
-    else:
-        sigma_cls = [torch.trace(cov).item() for cov in cov_cls]
-    in_score_my_tr = get_my_score(args, net, train_loader, mean_cls, cov_cls, in_dist = True)
-    in_score_my_va = get_my_score(args, net, test_loader, mean_cls, cov_cls, in_dist = True)
-    wandb.log({"my_score_train": wandb.Histogram(in_score_my_tr, num_bins=100)})
-    wandb.log({"my_score_val": wandb.Histogram(in_score_my_va, num_bins=100)})
+    class_names = get_test_labels(args, train_loader)
+    class_names = [name for name in class_names]  # convert it to list
     
-    data = [[label, var] for (label, var) in zip(np.arange(args.n_cls), sigma_cls)]
-    table = wandb.Table(data=data, columns=["label", 'var'])
-    wandb.log({"per class var": wandb.plot.bar(table, "label", "var", title="classwise var")})
+    # ============= Get the text embeddings
+    if args.text_embed in ['default']: 
+        prompts = [f"a photo of {class_name}" for class_name in class_names]
+        text_inputs = processor.tokenizer(prompts, return_tensors="pt", padding=True).input_ids.to(device)
+        with torch.no_grad():
+            text_mean_embeddings = net.get_text_features(text_inputs)
+            text_mean_embeddings = text_mean_embeddings / text_mean_embeddings.norm(dim=-1, keepdim=True)
+    else: 
+        # ====== compute embedding of captions
+        caption_file = f"{args.in_dataset.lower()}_captions.json"
+        with open(caption_file, 'r') as f:
+            all_captions = json.load(f)
+        
+        cls_embeddings = {}
+        for category, captions in all_captions.items():
+            text_inputs = processor.tokenizer(captions, return_tensors="pt", padding=True).input_ids.to(device)
+            with torch.no_grad():
+                text_features = net.get_text_features(text_inputs).float()  # Shape: [num_captions, embedding_dim]
+                text_features /= text_features.norm(dim=-1, keepdim=True)   # Normalize the embeddings
+
+            # Compute mean and variance of embeddings
+            mean_embedding = text_features.mean(dim=0)  # Shape: [embedding_dim]
+            mean_embedding = mean_embedding / torch.norm(mean_embedding, dim=-1)
+            var_embedding = text_features.var(dim=0)   # Shape: [embedding_dim]
+            
+            # compute var of the cosine distance
+            cos_dist = 1- torch.matmul(text_features, mean_embedding)
+            var_dist = torch.var(cos_dist, unbiased=False) 
+            
+            cls_embeddings[category] = {
+                "mean": mean_embedding,
+                "variance": var_embedding, 
+                "var_dist": var_dist.item(), 
+                "min_dist": cos_dist.min().item(), 
+                "max_dist": cos_dist.max().item(),
+                "caption_feats": text_features
+            }
+        text_mean_embeddings = torch.cat([value['mean'].view(1, -1) for key, value in cls_embeddings.items()], dim=0)
+        text_embeddings = torch.cat([value['caption_feats'] for key, value in cls_embeddings.items()], dim=0)
     
-    if args.score == 'maha':
-        os.makedirs(args.template_dir, exist_ok = True)
-        if args.generate:
-            classwise_mean, precision = get_mean_prec(args, net, train_loader)
-        classwise_mean = torch.load(os.path.join(args.template_dir, f'{args.model}_classwise_mean_{args.in_dataset}_{args.max_count}_{args.normalize}.pt'), map_location= 'cpu').cuda()
-        precision = torch.load(os.path.join(args.template_dir,  f'{args.model}_precision_{args.in_dataset}_{args.max_count}_{args.normalize}.pt'), map_location= 'cpu').cuda()
-        in_score = get_Mahalanobis_score(args, net, test_loader, classwise_mean, precision, in_dist = True)
-    else:
-        in_score = get_ood_scores_clip(args, net, test_loader, test_labels, in_dist=True)
-    wandb.log({"maha_score_val": wandb.Histogram(in_score, num_bins=100)})
+    # ============= Get the distance between ID img2text
+    if args.text_embed in ['default', 'mean']: 
+        id_scores = id_feats @ text_mean_embeddings.T
+        id_scores = id_scores.max(dim=-1).values
+    elif args.text_embed in ['max']: 
+        id_scores = id_feats @ text_embeddings.T
+        id_scores = id_scores.max(dim=-1).values
+    id_scores = id_scores.cpu().numpy()
+    log.debug(f"distribution of ID distance: {stats.describe(id_scores)}")
     
-    auroc_list, aupr_list, fpr_list = [], [], []
-    auroc_list1, aupr_list1, fpr_list1 = [], [], []
+    # ============= get OD features 
     for out_dataset in out_datasets:
-        log.debug(f"Evaluting OOD dataset {out_dataset}")
-        ood_loader = set_ood_loader_ImageNet(args, out_dataset, preprocess, root=os.path.join(args.root_dir, 'ImageNet_OOD_dataset'))
+        ood_loader = set_ood_loader_ImageNet(args, out_dataset, img_preprocess, 
+                                            root=os.path.join(args.root_dir, 'ImageNet_OOD_dataset'), subset=args.subset)
+        od_feats, _ = get_feat_labels(ood_loader, net, device, args)
+    
+        if args.text_embed in ['default', 'mean']: 
+            od_scores = od_feats @ text_mean_embeddings.T
+            od_scores = od_scores.max(dim=-1).values
+        elif args.text_embed in ['min']: 
+            od_scores = od_feats @ text_embeddings.T
+            od_scores = od_scores.max(dim=-1).values
+        od_scores = od_scores.cpu().numpy()
+        log.debug(f"distribution of OD distance: {stats.describe(od_scores)}")
         
-        out_score_my = get_my_score(args, net, ood_loader, mean_cls, cov_cls, in_dist = True)
-        log.debug(f"my in scores train: {stats.describe(in_score_my_tr)}")
-        log.debug(f"my in scores val: {stats.describe(in_score_my_va)}")
-        log.debug(f"my in scores ood: {stats.describe(out_score_my)}")
+        auroc, aupr, fpr, threshold = get_measures(id_scores, od_scores, recall_level=0.95)
+        log.debug(f"Using {args.text_embed} method, AUROC: {auroc:.4f}, AUPR: {aupr:.4f}, FPR@0.95: {fpr:.4f}, threshold: {threshold:.4f}")
         
-        if args.score == 'maha':
-            out_score = get_Mahalanobis_score(args, net, ood_loader, classwise_mean, precision, in_dist = False)
-        else:
-            out_score = get_ood_scores_clip(args, net, ood_loader, test_labels)
-        log.debug(f"in scores: {stats.describe(in_score)}")
-        log.debug(f"out scores: {stats.describe(out_score)}")
-        
-        auroc, aupr, fpr = get_and_print_results(args, log, in_score_my_va, out_score_my, auroc_list, aupr_list, fpr_list)
-        plot_path = plot_distribution(args, in_score_my_va, out_score_my, out_dataset)
-        wandb.log({f"NewScore-fpr:{fpr:.2f},auroc:{auroc:.2f},aupr:{aupr:.2f}--{args.in_dataset} vs {out_dataset}": wandb.Image(plot_path)})
-        
-        auroc, aupr, fpr = get_and_print_results(args, log, in_score, out_score, auroc_list1, aupr_list1, fpr_list1)
-        plot_path = plot_distribution(args, in_score, out_score, out_dataset)
-        wandb.log({f"{args.score}-fpr:{fpr:.2f},auroc:{auroc:.2f},aupr:{aupr:.2f}--{args.in_dataset} vs {out_dataset}": wandb.Image(plot_path)})
-        
-    log.debug('\n\nMean Test Results New')
-    print_measures(log, np.mean(auroc_list), np.mean(aupr_list), np.mean(fpr_list), method_name=args.score)
-    log.debug('\n\nMean Test Results')
-    print_measures(log, np.mean(auroc_list1), np.mean(aupr_list1), np.mean(fpr_list1), method_name=args.score)
-    save_as_dataframe(args, out_datasets, fpr_list, auroc_list, aupr_list)
+        plot_path = plot_distribution(args, id_scores, od_scores, out_dataset)
+        wandb.log({f"fpr:{fpr:.2f},auroc:{auroc:.2f},aupr:{aupr:.2f}--{args.in_dataset} vs {out_dataset}": wandb.Image(plot_path)})
 
 
 if __name__ == '__main__':

@@ -4,11 +4,13 @@ import numpy as np
 from tqdm import tqdm
 from scipy.stats import entropy
 import torchvision
+import json
 import sklearn.metrics as sk
 from transformers import CLIPTokenizer
 from torchvision import datasets
 import torch.nn.functional as F
 import torchvision
+from collections import OrderedDict
 
 
 def set_ood_loader_ImageNet(args, out_dataset, preprocess, root):
@@ -64,6 +66,7 @@ def stable_cumsum(arr, rtol=1e-05, atol=1e-08):
 
 
 def fpr_and_fdr_at_recall(y_true, y_score, recall_level=0.95, pos_label=None):
+
     classes = np.unique(y_true)
     if (pos_label is None and
             not (np.array_equal(classes, [0, 1]) or
@@ -103,7 +106,7 @@ def fpr_and_fdr_at_recall(y_true, y_score, recall_level=0.95, pos_label=None):
 
     cutoff = np.argmin(np.abs(recall - recall_level))
 
-    return fps[cutoff] / (np.sum(np.logical_not(y_true)))   # , fps[cutoff]/(fps[cutoff] + tps[cutoff])
+    return fps[cutoff] / (np.sum(np.logical_not(y_true))), thresholds[cutoff]   # , fps[cutoff]/(fps[cutoff] + tps[cutoff])
 
 def get_measures(_pos, _neg, recall_level=0.95):
     pos = np.array(_pos[:]).reshape((-1, 1))
@@ -114,9 +117,9 @@ def get_measures(_pos, _neg, recall_level=0.95):
 
     auroc = sk.roc_auc_score(labels, examples)
     aupr = sk.average_precision_score(labels, examples)
-    fpr = fpr_and_fdr_at_recall(labels, examples, recall_level)
+    fpr, threshold = fpr_and_fdr_at_recall(labels, examples, recall_level)
 
-    return auroc, aupr, fpr
+    return auroc, aupr, fpr, threshold
 
 
 def input_preprocessing(args, net, images, text_features = None, classifier = None):
@@ -265,52 +268,149 @@ def get_my_score(args, net, test_loader, classwise_mean, classwise_var, in_dist 
     return np.asarray(my_score_all, dtype=np.float32)
 
 
-def get_mean_cov_it(args, net, train_loader):
+def get_feat_labels(loader, net, device, args):
+        all_features, all_labels = [], []
+        with torch.no_grad():
+            for idx, (images, labels) in enumerate(tqdm(loader)):
+                images, labels = images.to(device), labels.to(device)
+                if args.model == 'CLIP': 
+                    features = net.get_image_features(pixel_values = images).float()
+                if args.normalize: 
+                    features /= features.norm(dim=-1, keepdim=True)
+                all_features.append(features) #for vit
+                all_labels.append(labels)
+        feats = torch.cat(all_features)
+        labels = torch.cat(all_labels)
+        return feats, labels
+
+
+def compute_min_distances_cls(id_feats, id_labels, cls_embeddings, class_names, device):
+        min_distances = torch.empty(len(id_labels), device=device)
+        with torch.no_grad():
+            for label in torch.unique(id_labels):  # Iterate over unique class labels
+                # Get indices for samples of the current class
+                class_indices = (id_labels == label).nonzero(as_tuple=True)[0]
+                image_embeddings = id_feats[class_indices]  # Shape: [num_samples_class, embedding_dim]
+                class_name = class_names[label.item()]
+                text_features = cls_embeddings[class_name]["caption_feats"].to(device)  # Shape: [num_text_features, embedding_dim]
+
+                # Compute cosine distances: (1 - cosine similarity)
+                distances = 1 - torch.matmul(image_embeddings, text_features.T)  # Shape: [num_samples_class, num_text_features]
+
+                # Find the minimum distance for each image in the class
+                min_distances[class_indices] = distances.min(dim=1).values  # Shape: [num_samples_class]
+
+        return min_distances
+
+
+def compute_min_distances(id_feats, cls_embeddings, class_names, device):
+        min_distances = torch.empty(len(id_feats), device=device)
+        with torch.no_grad():
+            for label in torch.unique(id_labels):  # Iterate over unique class labels
+                # Get indices for samples of the current class
+                class_indices = (id_labels == label).nonzero(as_tuple=True)[0]
+                image_embeddings = id_feats[class_indices]  # Shape: [num_samples_class, embedding_dim]
+                class_name = class_names[label.item()]
+                text_features = cls_embeddings[class_name]["caption_feats"].to(device)  # Shape: [num_text_features, embedding_dim]
+
+                # Compute cosine distances: (1 - cosine similarity)
+                distances = 1 - torch.matmul(image_embeddings, text_features.T)  # Shape: [num_samples_class, num_text_features]
+
+                # Find the minimum distance for each image in the class
+                min_distances[class_indices] = distances.min(dim=1).values  # Shape: [num_samples_class]
+
+        return min_distances
+
+def get_mean_cov_it(args, net, train_loader, processor, class_labels=None, ood_loader=None):
     '''
     used for Mahalanobis score. Calculate class-wise mean and inverse covariance matrix
     '''
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
-    all_features, all_labels = [], []
-    with torch.no_grad():
-        for idx, (images, labels) in enumerate(tqdm(train_loader)):
-            images, labels = images.to(device), labels.to(device)
-            if args.model == 'CLIP': 
-                features = net.get_image_features(pixel_values = images).float()
-            if args.normalize: 
-                features /= features.norm(dim=-1, keepdim=True)
-            all_features.append(features) #for vit
-            all_labels.append(labels)
-    feats = torch.cat(all_features)
-    labels = torch.cat(all_labels)
     
-     # ====== compute the center of the text encoder
-    class_names = train_loader.dataset.class_names_str
-    prompts = [f"a photo of {class_name}" for class_name in class_names]
-    t_cls = net.get_text_features(
-        input_ids=net.processor.tokenizer(prompts, return_tensors="pt", padding=True).input_ids.cuda()
-    )
-    t_cls = t_cls / t_cls.norm(dim=-1, keepdim=True)
+    id_feats, id_labels = get_feat_labels(train_loader, net, device, args)
+    od_feats, _ = get_feat_labels(ood_loader, net, device, args)
     
-    num_cls = [0 for _ in range(args.n_cls)]  # within class sample size
-    mean_cls = [0 for _ in range(args.n_cls)]
-    cov_cls = [0 for _ in range(args.n_cls)]
+    # ====== compute mean and var for each class using id img 
+    num_cls, mean_cls, var_cls = OrderedDict(), OrderedDict(), OrderedDict()
 
-    # ====== compute mean and var for each class
     for c in range(args.n_cls):
-
-        feats_c = feats[labels == c]   # [N, 512]
+        feats_c = id_feats[id_labels == c]   # [N, 512]
         num_cls[c] = len(feats_c)
         mean_cls[c] = torch.mean(feats_c, dim=0)  # [512]
-        # update within-class cov
         
+        # update within-class cov
         if args.normalize: 
-            mean_cls[c] /= mean_cls[c].norm(dim=-1, keepdim=True) # [1, 512]
-            cos_similarity = torch.matmul(feats_c, mean_cls[c])   # [N]
-            cos_dist = 1 - cos_similarity                         # [N]
-            cov_cls[c] = torch.var(cos_dist, unbiased=False)      # [1]
+            mean_cls[c] /= mean_cls[c].norm(dim=-1, keepdim=True)   # [1, 512]
+            cos_similarity = torch.matmul(feats_c, mean_cls[c])     # [N]
+            cos_dist = 1 - cos_similarity                           # [N]
+            var_cls[c] = torch.var(cos_dist, unbiased=False).item() # Scalar
         else:
             X = feats_c - mean_cls[c].unsqueeze(0)    # [N, 512]
-            cov_cls[c] = X.T @ X / num_cls[c]         # [512, 512]
+            var_cls[c] = X.T @ X / num_cls[c]         # [512, 512]
+    
+    img_mean_embeddings = torch.cat([embedding.view(1, -1) for embedding in mean_cls])
+
+    # ====== compute the center of the text encoder
+    class_names = class_labels if class_labels else train_loader.dataset.class_names_str
+    class_names = [name for name in class_names]
+        
+    prompts = [f"a photo of {class_name}" for class_name in class_names]
+    text_inputs = processor.tokenizer(prompts, return_tensors="pt", padding=True).input_ids.to(device)
+    with torch.no_grad():
+        text_embeddings = net.get_text_features(text_inputs)
+        text_embeddings = text_embeddings / text_embeddings.norm(dim=-1, keepdim=True)
+    
+    # ====== compute embedding of captions
+    caption_file = f"{args.in_dataset.lower()}_captions.json"
+    with open(caption_file, 'r') as f:
+        all_captions = json.load(f)
+    
+    cls_embeddings = {}
+    for category, captions in all_captions.items():
+        text_inputs = processor.tokenizer(captions, return_tensors="pt", padding=True).input_ids.to(device)
+        with torch.no_grad():
+            text_features = net.get_text_features(text_inputs).float()  # Shape: [num_captions, embedding_dim]
+            text_features /= text_features.norm(dim=-1, keepdim=True)   # Normalize the embeddings
+
+        # Compute mean and variance of embeddings
+        mean_embedding = text_features.mean(dim=0)  # Shape: [embedding_dim]
+        mean_embedding = mean_embedding / torch.norm(mean_embedding, dim=-1)
+        var_embedding = text_features.var(dim=0)   # Shape: [embedding_dim]
+        
+        # compute var of the cosine distance
+        cos_dist = 1- torch.matmul(text_features, mean_embedding)
+        var_dist = torch.var(cos_dist, unbiased=False) 
+        
+        cls_embeddings[category] = {
+            "mean": mean_embedding,
+            "variance": var_embedding, 
+            "var_dist": var_dist.item(), 
+            "min_dist": cos_dist.min().item(), 
+            "max_dist": cos_dist.max().item(),
+            "caption_feats": text_features
+        }
+    # ====== distance between ID img2text_embed
+    min_distances = compute_min_distances_cls(id_feats, id_labels, cls_embeddings, class_names, device)
+    
+    # ===== Compute variance of img2text distance 
+    var_img2text_cls = {}
+    for c in range(args.n_cls):
+        class_mask = (id_labels == c)
+        class_distances = min_distances[class_mask]
+        var_img2text_cls[c] = [class_distances.min().item(), class_distances.max().item(), class_distances.var(unbiased=True).item()]
+    
+    
+    # ===== compute distance between od data and text 
+    od_distances = 1 - od_feats @ text_features.T
+    od_distances = od_distances.min(dim=1).values()
+                
+    [cls['var_dist'].item() for k, cls in cls_embeddings.items()]
+    [cov.item() for cov in cov_cls]
+        
+    
+    cls_mean_embeddings = torch.cat([(value['mean']/torch.norm(value['mean'])).view(1,-1) for key, value in cls_embeddings.items()], dim=0)
+    
+    all_embeddings = torch.cat([text_embeddings.to(device), cls_mean_embeddings.to(device), img_mean_embeddings.to(device)], dim=0)
     
     return mean_cls, cov_cls
 
