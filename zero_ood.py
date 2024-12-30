@@ -4,7 +4,13 @@ import wandb
 import argparse
 import numpy as np
 import torch
+import seaborn as sns
 from scipy import stats
+from scipy.stats import zscore
+import matplotlib.pyplot as plt
+from sklearn.manifold import TSNE
+from sklearn.preprocessing import LabelEncoder
+from text_prompt_var import generate_captions
 
 from ood_utils.common import setup_seed, get_num_cls, get_test_labels
 from ood_utils.detection_util import get_Mahalanobis_score, get_mean_prec, get_and_print_results, get_mean_cov_it, get_feat_labels, get_measures 
@@ -94,13 +100,18 @@ def main():
             text_mean_embeddings = text_mean_embeddings / text_mean_embeddings.norm(dim=-1, keepdim=True)
     else: 
         # ====== compute embedding of captions
-        caption_file = f"{args.in_dataset.lower()}_captions.json"
-        with open(caption_file, 'r') as f:
-            all_captions = json.load(f)
+        import pdb; pdb.set_trace()
+        file_name = f"{args.in_dataset.lower()}_captions.json"
+        if os.path.exists(file_name): 
+            with open(file_name, 'r') as f:
+                all_captions = json.load(f)
+            print(f"load captions from {file_name}")
+        else: 
+            all_captions = generate_captions(class_names, file_name)
         
         cls_embeddings = {}
         for category, captions in all_captions.items():
-            text_inputs = processor.tokenizer(captions, return_tensors="pt", padding=True).input_ids.to(device)
+            text_inputs = processor.tokenizer(captions, return_tensors="pt", padding=True, truncation=True, max_length=77,).input_ids.to(device)
             with torch.no_grad():
                 text_features = net.get_text_features(text_inputs).float()  # Shape: [num_captions, embedding_dim]
                 text_features /= text_features.norm(dim=-1, keepdim=True)   # Normalize the embeddings
@@ -112,7 +123,17 @@ def main():
             
             # compute var of the cosine distance
             cos_dist = 1- torch.matmul(text_features, mean_embedding)
-            var_dist = torch.var(cos_dist, unbiased=False) 
+            var_dist = torch.var(cos_dist, unbiased=False)
+            
+            z_scores = zscore(cos_dist.cpu().numpy())
+            threshold = 2.5  # Threshold for identifying outliers, you can adjust this value
+            non_outlier_indices = np.abs(z_scores) < threshold
+            filtered_text_features = text_features[non_outlier_indices]
+            
+            # Ensure that we only keep the top 25 embeddings (after filtering out outliers)
+            if len(filtered_text_features) > 25:
+                filtered_text_features = filtered_text_features[:25]
+            print(f'{category} with {len(filtered_text_features)} features')
             
             cls_embeddings[category] = {
                 "mean": mean_embedding,
@@ -120,10 +141,13 @@ def main():
                 "var_dist": var_dist.item(), 
                 "min_dist": cos_dist.min().item(), 
                 "max_dist": cos_dist.max().item(),
-                "caption_feats": text_features
+                "caption_feats": filtered_text_features, 
+                "text_labels": torch.full((len(text_features),), class_names.index(category), dtype=torch.long, device=device)
             }
         text_mean_embeddings = torch.cat([value['mean'].view(1, -1) for key, value in cls_embeddings.items()], dim=0)
         text_embeddings = torch.cat([value['caption_feats'] for key, value in cls_embeddings.items()], dim=0)
+        text_labels = torch.cat([value['text_labels'] for key, value in cls_embeddings.items()])
+        
     
     # ============= Get the distance between ID img2text
     if args.text_embed in ['default', 'mean']: 
@@ -135,6 +159,39 @@ def main():
     id_scores = id_scores.cpu().numpy()
     log.debug(f"distribution of ID distance: {stats.describe(id_scores)}")
     
+    # =============== code for plot 
+    
+    def plot_similarity_density(id_scores, top_k=25, wandb_log=True):
+        import matplotlib.pyplot as plt
+        all_top_scores = []  # This will hold the top k scores for all images
+
+        # Create the figure to hold the plots
+        plt.figure(figsize=(10, 6))
+
+        # Iterate over each image (rows of id_scores) to get top_k similarity scores
+        for i in range(id_scores.shape[0]):  # 1000 images
+            image_scores = id_scores[i, :]  # similarity scores for one image (length 250)
+            top_scores = np.sort(image_scores)[::-1][:top_k]
+
+            # Add top scores to the list for overlay plot
+            all_top_scores.extend(top_scores)
+
+            # Plot the density for this image (individual plot)
+            sns.kdeplot(top_scores, shade=True, label=f"Image {i+1}", alpha=0.7)
+
+        # Overlay plot for all images (1000 images)
+        sns.kdeplot(all_top_scores, shade=True, color='green', label="Overlay of All Images", alpha=0.7)
+
+        # Titles and labels
+        plt.title(f"Density of Top {top_k} Cosine Similarity Scores for 1000 Images")
+        plt.xlabel("Cosine Similarity")
+        plt.ylabel("Density")
+        plt.legend()
+        
+        plot_image_path = "similarity_density_plot.png"
+        plt.savefig(plot_image_path)
+
+    
     # ============= get OD features 
     for out_dataset in out_datasets:
         ood_loader = set_ood_loader_ImageNet(args, out_dataset, img_preprocess, 
@@ -144,7 +201,7 @@ def main():
         if args.text_embed in ['default', 'mean']: 
             od_scores = od_feats @ text_mean_embeddings.T
             od_scores = od_scores.max(dim=-1).values
-        elif args.text_embed in ['min']: 
+        elif args.text_embed in ['max']: 
             od_scores = od_feats @ text_embeddings.T
             od_scores = od_scores.max(dim=-1).values
         od_scores = od_scores.cpu().numpy()
@@ -155,6 +212,42 @@ def main():
         
         plot_path = plot_distribution(args, id_scores, od_scores, out_dataset)
         wandb.log({f"fpr:{fpr:.2f},auroc:{auroc:.2f},aupr:{aupr:.2f}--{args.in_dataset} vs {out_dataset}": wandb.Image(plot_path)})
+        
+        # ============ T-SNE plot
+        import matplotlib.pyplot as plt
+
+        all_feats = torch.cat([id_feats, text_embeddings, od_feats], dim=0)
+        od_labels = torch.full((len(od_feats),), -1, dtype=torch.long, device=device)
+        all_labels = torch.cat([id_labels, text_labels, od_labels])
+        all_feats, all_labels = all_feats.cpu().numpy(), all_labels.cpu().numpy()
+
+        # Apply t-SNE for dimensionality reduction
+        tsne = TSNE(n_components=2, random_state=42)
+        tsne_results = tsne.fit_transform(all_feats)
+
+        plt.figure(figsize=(10, 8))
+
+        plt.scatter(tsne_results[:len(id_feats), 0], tsne_results[:len(id_feats), 1], 
+                    c=all_labels[:len(id_feats)], cmap='tab10', label='In-distribution', alpha=0.6, marker='o', s=10)
+        
+        plt.scatter(tsne_results[len(id_feats):len(id_feats) + len(text_embeddings), 0], 
+                    tsne_results[len(id_feats):len(id_feats) + len(text_embeddings), 1],
+                    c=all_labels[len(id_feats):len(id_feats) + len(text_embeddings)], cmap='tab10', label='Text-embedding', alpha=0.6, marker='+', s=10)
+
+        plt.scatter(tsne_results[len(id_feats) + len(text_embeddings):, 0], 
+                    tsne_results[len(id_feats) + len(text_embeddings):, 1], 
+                    c='gray', label='Out-of-distribution', alpha=0.6, s=10)
+
+        # Labeling and legend
+        plt.title('t-SNE Visualization of Image and Text Embeddings')
+        plt.xlabel('t-SNE Component 1')
+        plt.ylabel('t-SNE Component 2')
+        plt.legend()
+        
+        plt.savefig('tsne_plot.png')
+
+        # Log the plot to W&B
+        wandb.log({'t-SNE Plot': wandb.Image('tsne_plot.png')})
 
 
 if __name__ == '__main__':

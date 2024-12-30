@@ -1,6 +1,9 @@
 from huggingface_hub import login
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from transformers import pipeline
+import nltk
+nltk.download('wordnet')
+from nltk.corpus import wordnet as wn
 
 import transformers
 import torch
@@ -14,51 +17,74 @@ def extract_captions(output_text):
     Returns: list: A list of extracted captions.
     """
     # Define a regex pattern to match numbered list items (e.g., "1. Caption text")
-    pattern = r"^\d+\.\s+(.*)"
+    pattern = r"^\d+\.\s+(.+)$"
     
     # Split the text into lines and search for matches
     lines = output_text.splitlines()
-    captions = [re.match(pattern, line).group(1).strip('"') for line in lines if re.match(pattern, line)]
+    captions = [
+        re.match(pattern, line).group(1).strip('"') 
+        for line in lines if re.match(pattern, line)
+        ]
     
     return captions
 
 
-pipeline = transformers.pipeline(
-    "text-generation",
-    model="./Llama-3.1-8B-Instruct",
-    model_kwargs={"torch_dtype": torch.bfloat16},
-    device_map="auto",
-)
+def generate_captions(class_name_list, file_name):
+    pipeline = transformers.pipeline(
+        "text-generation",
+        model="./Llama-3.1-8B-Instruct",
+        model_kwargs={"torch_dtype": torch.bfloat16},
+        device_map="auto",
+    )
 
-# ===== generate captions for class names  ===== 
-class_name_list = ['brambling bird', 'bull frog', 'swiss mountain dog', 'Siamese cat', 'horse', 'antelope', 'container ship', 'garbage truck', 'sports car', 'warplane']
-all_captions = {}
-for class_name in class_name_list:
-    prompt_list = []
-    num_captions = 5
-    input_prompt = (f"Generate {num_captions} diverse and descriptive captions for images of a {class_name},"
-                    " similar to the text prompts used in the training data of the CLIP model.")
-                    # " Each caption may describe the object's appearance, activities, and environment across various scenarios. "  
-                    # " Focus on creating realistic and contextually appropriate descriptions.")
-
-    # Generate responses
-    responses = pipeline(input_prompt, max_length=256, num_return_sequences=5)
-    for response in responses:
-        captions = extract_captions(response['generated_text'])
-        prompt_list.extend(captions)
+    # ===== generate captions for class names  ===== 
+    all_captions = {}
+    for i, class_name in enumerate(class_name_list):
+        prompt_list = []
         
-    all_captions[class_name] = prompt_list
+        input_prompts = [
+            f"Generate 3 diverse and descriptive captions for images of a {class_name}, "+
+            f"similar to the text prompts used in the training data of the CLIP model.",
+        ]
+         
+        if class_name in ['brambling bird', 'bull frog', 'swiss mountain dog', 'Siamese cat', 'horse', 'antelope']: 
+            input_prompts += [
+                f"Generate 5 diverse captions for images of {class_name}. Include the word '{class_name}' explicitly, and describe their behaviors, habitats, and physical traits.", 
+                f"Generate 5 diverse captions for zoomed-in images of {class_name}. Include the word '{class_name}' explicitly and describe its unique physical features, such as fur, skin, eyes, color."
+            ]
+        else: 
+            input_prompts += [
+                f"Generate 5 diverse captions for images of {class_name}. Include the word '{class_name}' explicitly, and describe their visual features, design, context, and how it is used",
+                f"Generate 5 diverse captions for zoomed-in images of {class_name}. Include the word '{class_name}' explicitly, and describe its key features, such as, color, design details, body structure."
+                ]
+        
+        for input_prompt in input_prompts:
+            # Generate responses
+            responses = pipeline(input_prompt, max_length=200, num_return_sequences=5)
+            for response in responses:
+                captions = extract_captions(response['generated_text'])
+                prompt_list.extend(captions)
+            
+        all_captions[class_name] = prompt_list
+        
+
+    # Save the dictionary to a JSON file
+    with open(file_name, "w", encoding="utf-8") as f:
+        json.dump(all_captions, f, ensure_ascii=False, indent=4)
+
+    print(f"Captions successfully saved to {file_name}.")
     
+    return all_captions
 
-# Specify the file path where you want to save the captions
-output_file = "captions.json"
+if __name__ == "__main__":
+    class_names = class_name_list = ['brambling bird', 'bull frog', 'swiss mountain dog', 'Siamese cat', 'horse', 'antelope', 'container ship', 'garbage truck', 'sports car', 'warplane']
 
-# Save the dictionary to a JSON file
-with open(output_file, "w", encoding="utf-8") as f:
-    json.dump(all_captions, f, ensure_ascii=False, indent=4)
+    # synsets = wn.synsets('horse')
+    # horse_synset = synsets[0]  # Take the most common sense
+    # hypernyms = horse_synset.hypernyms()
 
-print(f"Captions successfully saved to {output_file}.")
-        
+    generate_captions(class_names, file_name='imagenet10_captions.json')
+            
 
 
 
