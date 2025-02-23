@@ -38,6 +38,7 @@ def process_args():
     
     # for new image to text embedding distance 
     parser.add_argument('--text_embed', type=str, default='default', help='which text embed to compare to')  # default | mean | min
+    parser.add_argument('--dist', type=str, default='default', help='which distance metric')  # default | softmax | norm
 
     # for Mahalanobis score
     parser.add_argument('--feat_dim', type=int, default=512, help='feat dim； 512 for ViT-B and 768 for ViT-L')
@@ -53,6 +54,68 @@ def process_args():
     os.makedirs(args.log_directory, exist_ok=True)
 
     return args
+
+
+def get_text_embed(args, processor, class_names, net):
+    device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+    if args.text_embed in ['default']:
+        prompts = [f"a photo of {class_name}" for class_name in class_names]
+        text_inputs = processor.tokenizer(prompts, return_tensors="pt", padding=True).input_ids.to(device)
+        cls_embeddings = {}
+        with torch.no_grad():
+            text_mean_embeddings = net.get_text_features(text_inputs)
+            text_mean_embeddings = text_mean_embeddings / text_mean_embeddings.norm(dim=-1, keepdim=True)
+
+    else:
+        # ====== compute embedding of captions
+        file_name = f"{args.in_dataset.lower()}_captions.json"
+        if os.path.exists(file_name):
+            with open(file_name, 'r') as f:
+                all_captions = json.load(f)
+            print(f"load captions from {file_name}")
+        else:
+            all_captions = generate_captions(class_names, file_name)
+
+        cls_embeddings = {}
+        for category, captions in all_captions.items():
+            text_inputs = processor.tokenizer(captions, return_tensors="pt", padding=True, truncation=True,
+                                              max_length=77, ).input_ids.to(device)
+            with torch.no_grad():
+                text_features = net.get_text_features(text_inputs).float()  # Shape: [num_captions, embedding_dim]
+                text_features /= text_features.norm(dim=-1, keepdim=True)  # Normalize the embeddings
+
+            # Compute mean and variance of embeddings
+            mean_embedding = text_features.mean(dim=0)  # Shape: [embedding_dim]
+            mean_embedding = mean_embedding / torch.norm(mean_embedding, dim=-1)
+            var_embedding = text_features.var(dim=0)  # Shape: [embedding_dim]
+
+            # compute var of the cosine distance
+            cos_dist = 1 - torch.matmul(text_features, mean_embedding)
+            var_dist = torch.var(cos_dist, unbiased=False)
+
+            z_scores = zscore(cos_dist.cpu().numpy())
+            threshold = 2.5  # Threshold for identifying outliers, you can adjust this value
+            non_outlier_indices = np.abs(z_scores) < threshold
+            filtered_text_features = text_features[non_outlier_indices]
+
+            # Ensure that we only keep the top 25 embeddings (after filtering out outliers)
+            if len(filtered_text_features) > 25:
+                filtered_text_features = filtered_text_features[:25]
+            print(f'{category} with {len(filtered_text_features)} features')
+
+            cls_embeddings[category] = {
+                "mean": mean_embedding,
+                "variance": var_embedding,
+                "var_dist": var_dist.item(),
+                "min_dist": cos_dist.min().item(),
+                "max_dist": cos_dist.max().item(),
+                "caption_feats": filtered_text_features,
+                "text_labels": torch.full((len(text_features),), class_names.index(category), dtype=torch.long,
+                                          device=device)
+            }
+        text_mean_embeddings = torch.cat([value['mean'].view(1, -1) for key, value in cls_embeddings.items()], dim=0)
+    return cls_embeddings, text_mean_embeddings
+
 
 def main():
     args = process_args()
@@ -88,74 +151,33 @@ def main():
     train_loader = set_train_loader(args, img_preprocess, subset = args.subset)
     id_feats, id_labels = get_feat_labels(train_loader, net, device, args)
     
+    # ============= Get the text embeddings
     class_names = get_test_labels(args, train_loader)
     class_names = [name for name in class_names]  # convert it to list
-    
-    # ============= Get the text embeddings
-    if args.text_embed in ['default']: 
-        prompts = [f"a photo of {class_name}" for class_name in class_names]
-        text_inputs = processor.tokenizer(prompts, return_tensors="pt", padding=True).input_ids.to(device)
-        with torch.no_grad():
-            text_mean_embeddings = net.get_text_features(text_inputs)
-            text_mean_embeddings = text_mean_embeddings / text_mean_embeddings.norm(dim=-1, keepdim=True)
-    else: 
-        # ====== compute embedding of captions
-        import pdb; pdb.set_trace()
-        file_name = f"{args.in_dataset.lower()}_captions.json"
-        if os.path.exists(file_name): 
-            with open(file_name, 'r') as f:
-                all_captions = json.load(f)
-            print(f"load captions from {file_name}")
-        else: 
-            all_captions = generate_captions(class_names, file_name)
+    cls_embeddings, text_mean_embeddings = get_text_embed(args, processor, class_names, net)
         
-        cls_embeddings = {}
-        for category, captions in all_captions.items():
-            text_inputs = processor.tokenizer(captions, return_tensors="pt", padding=True, truncation=True, max_length=77,).input_ids.to(device)
-            with torch.no_grad():
-                text_features = net.get_text_features(text_inputs).float()  # Shape: [num_captions, embedding_dim]
-                text_features /= text_features.norm(dim=-1, keepdim=True)   # Normalize the embeddings
-
-            # Compute mean and variance of embeddings
-            mean_embedding = text_features.mean(dim=0)  # Shape: [embedding_dim]
-            mean_embedding = mean_embedding / torch.norm(mean_embedding, dim=-1)
-            var_embedding = text_features.var(dim=0)   # Shape: [embedding_dim]
-            
-            # compute var of the cosine distance
-            cos_dist = 1- torch.matmul(text_features, mean_embedding)
-            var_dist = torch.var(cos_dist, unbiased=False)
-            
-            z_scores = zscore(cos_dist.cpu().numpy())
-            threshold = 2.5  # Threshold for identifying outliers, you can adjust this value
-            non_outlier_indices = np.abs(z_scores) < threshold
-            filtered_text_features = text_features[non_outlier_indices]
-            
-            # Ensure that we only keep the top 25 embeddings (after filtering out outliers)
-            if len(filtered_text_features) > 25:
-                filtered_text_features = filtered_text_features[:25]
-            print(f'{category} with {len(filtered_text_features)} features')
-            
-            cls_embeddings[category] = {
-                "mean": mean_embedding,
-                "variance": var_embedding, 
-                "var_dist": var_dist.item(), 
-                "min_dist": cos_dist.min().item(), 
-                "max_dist": cos_dist.max().item(),
-                "caption_feats": filtered_text_features, 
-                "text_labels": torch.full((len(text_features),), class_names.index(category), dtype=torch.long, device=device)
-            }
-        text_mean_embeddings = torch.cat([value['mean'].view(1, -1) for key, value in cls_embeddings.items()], dim=0)
-        text_embeddings = torch.cat([value['caption_feats'] for key, value in cls_embeddings.items()], dim=0)
-        text_labels = torch.cat([value['text_labels'] for key, value in cls_embeddings.items()])
-        
-    
     # ============= Get the distance between ID img2text
-    if args.text_embed in ['default', 'mean']: 
-        id_scores = id_feats @ text_mean_embeddings.T
-        id_scores = id_scores.max(dim=-1).values
-    elif args.text_embed in ['max']: 
-        id_scores = id_feats @ text_embeddings.T
-        id_scores = id_scores.max(dim=-1).values
+    def get_id_score(args, id_feats, text_mean_embeddings):
+        if args.dist in ['default', 'cos']: 
+            id_scores = id_feats @ text_mean_embeddings.T
+            id_scores = id_scores.max(dim=-1).values
+        elif args.dist in ['softmax']:
+            id_scores = id_feats @ text_mean_embeddings.T      # B x K
+            softmax_scores = torch.softmax(id_scores, dim=-1)  # B x K
+            id_scores = softmax_scores.max(dim=-1).values      # B
+        elif args.dist in ['ratio']:
+            id_scores = id_feats @ text_mean_embeddings.T  # B x K
+            top2_scores, _ = id_scores.topk(2, dim=-1)     # B x 2
+            id_scores = top2_scores[:, 0] / (top2_scores[:, 1] + 1e-8)
+        elif args.dist in ['norm']: 
+            id_scores = id_feats @ text_mean_embeddings.T  # B x K
+            mean_scores = id_scores.mean(dim=-1, keepdim=True)  # B x 1
+            std_scores = id_scores.std(dim=-1, keepdim=True)    # B x 1
+            normalized_scores = (id_scores - mean_scores) / (std_scores + 1e-8)  # B x K
+            id_scores = normalized_scores.max(dim=-1).values  # B
+        return id_scores
+
+    id_scores = get_id_score(args, id_feats, text_mean_embeddings)
     id_scores = id_scores.cpu().numpy()
     log.debug(f"distribution of ID distance: {stats.describe(id_scores)}")
     
@@ -198,12 +220,7 @@ def main():
                                             root=os.path.join(args.root_dir, 'ImageNet_OOD_dataset'), subset=args.subset)
         od_feats, _ = get_feat_labels(ood_loader, net, device, args)
     
-        if args.text_embed in ['default', 'mean']: 
-            od_scores = od_feats @ text_mean_embeddings.T
-            od_scores = od_scores.max(dim=-1).values
-        elif args.text_embed in ['max']: 
-            od_scores = od_feats @ text_embeddings.T
-            od_scores = od_scores.max(dim=-1).values
+        od_scores = get_id_score(args, od_feats, text_mean_embeddings)
         od_scores = od_scores.cpu().numpy()
         log.debug(f"distribution of OD distance: {stats.describe(od_scores)}")
         
@@ -213,41 +230,43 @@ def main():
         plot_path = plot_distribution(args, id_scores, od_scores, out_dataset)
         wandb.log({f"fpr:{fpr:.2f},auroc:{auroc:.2f},aupr:{aupr:.2f}--{args.in_dataset} vs {out_dataset}": wandb.Image(plot_path)})
         
-        # ============ T-SNE plot
-        import matplotlib.pyplot as plt
+        # ============ T-SNE plot for text embeddings
+        if args.text_embed in ['llm']:
+            text_embeddings = torch.cat([value['caption_feats'] for key, value in cls_embeddings.items()], dim=0)
+            text_labels = torch.cat([value['text_labels'] for key, value in cls_embeddings.items()])
+            
+            all_feats = torch.cat([id_feats, text_embeddings, od_feats], dim=0)
+            od_labels = torch.full((len(od_feats),), -1, dtype=torch.long, device=device)
+            all_labels = torch.cat([id_labels, text_labels, od_labels])
+            all_feats, all_labels = all_feats.cpu().numpy(), all_labels.cpu().numpy()
 
-        all_feats = torch.cat([id_feats, text_embeddings, od_feats], dim=0)
-        od_labels = torch.full((len(od_feats),), -1, dtype=torch.long, device=device)
-        all_labels = torch.cat([id_labels, text_labels, od_labels])
-        all_feats, all_labels = all_feats.cpu().numpy(), all_labels.cpu().numpy()
+            # Apply t-SNE for dimensionality reduction
+            tsne = TSNE(n_components=2, random_state=42)
+            tsne_results = tsne.fit_transform(all_feats)
 
-        # Apply t-SNE for dimensionality reduction
-        tsne = TSNE(n_components=2, random_state=42)
-        tsne_results = tsne.fit_transform(all_feats)
+            plt.figure(figsize=(10, 8))
 
-        plt.figure(figsize=(10, 8))
+            plt.scatter(tsne_results[:len(id_feats), 0], tsne_results[:len(id_feats), 1], 
+                        c=all_labels[:len(id_feats)], cmap='tab10', label='In-distribution', alpha=0.6, marker='o', s=10)
+            
+            plt.scatter(tsne_results[len(id_feats):len(id_feats) + len(text_embeddings), 0], 
+                        tsne_results[len(id_feats):len(id_feats) + len(text_embeddings), 1],
+                        c=all_labels[len(id_feats):len(id_feats) + len(text_embeddings)], cmap='tab10', label='Text-embedding', alpha=0.6, marker='+', s=10)
 
-        plt.scatter(tsne_results[:len(id_feats), 0], tsne_results[:len(id_feats), 1], 
-                    c=all_labels[:len(id_feats)], cmap='tab10', label='In-distribution', alpha=0.6, marker='o', s=10)
-        
-        plt.scatter(tsne_results[len(id_feats):len(id_feats) + len(text_embeddings), 0], 
-                    tsne_results[len(id_feats):len(id_feats) + len(text_embeddings), 1],
-                    c=all_labels[len(id_feats):len(id_feats) + len(text_embeddings)], cmap='tab10', label='Text-embedding', alpha=0.6, marker='+', s=10)
+            plt.scatter(tsne_results[len(id_feats) + len(text_embeddings):, 0], 
+                        tsne_results[len(id_feats) + len(text_embeddings):, 1], 
+                        c='gray', label='Out-of-distribution', alpha=0.6, s=10)
 
-        plt.scatter(tsne_results[len(id_feats) + len(text_embeddings):, 0], 
-                    tsne_results[len(id_feats) + len(text_embeddings):, 1], 
-                    c='gray', label='Out-of-distribution', alpha=0.6, s=10)
+            # Labeling and legend
+            plt.title('t-SNE Visualization of Image and Text Embeddings')
+            plt.xlabel('t-SNE Component 1')
+            plt.ylabel('t-SNE Component 2')
+            plt.legend()
+            
+            plt.savefig('tsne_plot.png')
 
-        # Labeling and legend
-        plt.title('t-SNE Visualization of Image and Text Embeddings')
-        plt.xlabel('t-SNE Component 1')
-        plt.ylabel('t-SNE Component 2')
-        plt.legend()
-        
-        plt.savefig('tsne_plot.png')
-
-        # Log the plot to W&B
-        wandb.log({'t-SNE Plot': wandb.Image('tsne_plot.png')})
+            # Log the plot to W&B
+            wandb.log({'t-SNE Plot': wandb.Image('tsne_plot.png')})
 
 
 if __name__ == '__main__':
