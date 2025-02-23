@@ -154,15 +154,20 @@ def main(args):
             val_loss = F.cross_entropy(logits, labels, reduction='mean').item()   # on cuda 
             val_acc = (logits.argmax(dim=-1) == labels).sum().item()/len(labels)  # on cuda
             val_acc_cls = classwise_acc(labels.cpu().numpy(), logits.argmax(dim=-1).cpu().numpy())
-            val_ece15 = ece_criterion15(logits, labels).item()  # on cuda
-            val_ece20 = ece_criterion20(logits, labels).item()  # on cuda
-            val_ece25 = ece_criterion25(logits, labels).item()  # on cuda
 
-            # post process ece
-            scaled_model = ModelWithTemperature(model)
-            val_ece20_post, _ = scaled_model.set_temperature(test_loader, cross_validate='ece', 
-                                                             n_bins=20, ece_type=args.ece_type)
+            if args.ece_flag:
+                val_ece15 = ece_criterion15(logits, labels).item()  # on cuda
+                val_ece20 = ece_criterion20(logits, labels).item()  # on cuda
+                val_ece25 = ece_criterion25(logits, labels).item()  # on cuda
 
+                # post process ece
+                scaled_model = ModelWithTemperature(model)
+                val_ece20_post, _ = scaled_model.set_temperature(test_loader, cross_validate='ece', 
+                                                                n_bins=20, ece_type=args.ece_type)
+            else:
+                val_ece15, val_ece20, val_ece25, val_ece20_post = None, None, None, None
+                scaled_model = None
+            
             wandb.log({
                 'overall/lr': optimizer.param_groups[0]['lr'],
                 'overall/train_loss': train_loss.avg,
@@ -170,29 +175,30 @@ def main(args):
                 'overall/train_acc': train_acc.avg,
                 'overall/val_loss': val_loss,
                 'overall/val_acc': val_acc,
-                'ece/val_ece15': val_ece15,
-                'ece/val_ece20': val_ece20,
-                'ece/val_ece25': val_ece25,
-                'ece/val_ece20_post': val_ece20_post,
-                'ece/best_temp': scaled_model.temperature
-                },
-                step=epoch)
+                'ece/val_ece15': val_ece15 if args.ece_flag else 0,
+                'ece/val_ece20': val_ece20 if args.ece_flag else 0,
+                'ece/val_ece25': val_ece25 if args.ece_flag else 0,
+                'ece/val_ece20_post': val_ece20_post if args.ece_flag else 0,
+                'ece/best_temp': scaled_model.temperature if args.ece_flag else 0
+                }, step=epoch)
 
             # ================= check NCs
-            nc_val = analysis_feat(labels, feats, args, W=model.classifier.weight.detach())
-
             logits, labels, feats = get_logits_labels_feats(train_loader, model)  # on cuda
-            nc_train = analysis_feat(labels, feats, args, W=model.classifier.weight.detach())
+            nc_train, centroid = analysis_feat(labels, feats, args, W=model.classifier.weight.detach(),centroid=None)
+            nc_val, _ = analysis_feat(labels, feats, args, W=model.classifier.weight.detach(), centroid=centroid)
             state['var_cls'] = nc_train['var_cls']
 
             wandb.log({
-                'train_nc/nc1': nc_train['nc1'],       'train_nc/nc2': nc_train['nc2'],
-                'train_nc/nc3': nc_train['nc3'],       'train_nc/nc2h': nc_train['nc2h'],
-                'train_nc/w_norm': nc_train['w_norm'], 'train_nc/h_norm': nc_train['h_norm'],
+                'train_nc/nc1': nc_train['nc1'],  'train_nc/nc2': nc_train['nc2'],
+                'train_nc/nc3': nc_train['nc3'],  'train_nc/nc2h': nc_train['nc2h'],
+                'train_nc/ncc_acc': nc_train['ncc_acc'],
+
+                'other_nc/w_norm': nc_train['w_norm'], 'other_nc/h_norm': nc_train['h_norm'],
+                'otehr_nc/nc2w': nc_train['nc2w'],
 
                 'val_nc/nc1': nc_val['nc1'], 'val_nc/nc2': nc_val['nc2'],
                 'val_nc/nc3': nc_val['nc3'], 'val_nc/nc2h': nc_val['nc2h'],
-                'val_nc/nc2w': nc_val['nc2w'],
+                'val_nc/ncc_acc': nc_val['ncc_acc'],
             }, step=epoch)
             
             if (epoch + 1) % (args.log_freq*5) == 0 or epoch == 0:
@@ -256,7 +262,7 @@ if __name__ == "__main__":
     
     # ece type ece|adaece
     parser.add_argument('--ece_type', type=str, default='ece')
-    
+    parser.add_argument('--ece_flag', action='store_true', default=False)
 
     # dataset parameters of CIFAR10
     parser.add_argument('--num_classes', type=int, default=10)
@@ -308,7 +314,7 @@ if __name__ == "__main__":
     os.environ["WANDB_CACHE_DIR"] = "/scratch/lg154/sseg/.cache/wandb"
     os.environ["WANDB_CONFIG_DIR"] = "/scratch/lg154/sseg/.config/wandb"
     wandb.login(key='0c0abb4e8b5ce4ee1b1a4ef799edece5f15386ee')
-    wandb.init(project='nc_ece',
+    wandb.init(project='nc_2025',
                name=args.exp_name
                )
     wandb.config.update(args)

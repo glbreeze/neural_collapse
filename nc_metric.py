@@ -39,7 +39,7 @@ def compute_W_H_relation(W, H, device):  # W:[K, 512] H:[512, K]
     return res.detach().cpu().numpy().item()
 
 
-def analysis_feat(labels, feats, args, W=None):
+def analysis_feat(labels, feats, args, W, centroid=None):
     # analysis without extracting features
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -50,9 +50,7 @@ def analysis_feat(labels, feats, args, W=None):
 
     # ====== compute mean and var for each class
     for c in range(args.num_classes):
-
         feats_c = feats[labels == c]   # [N, 512]
-
         num_cls[c] = len(feats_c)
         mean_cls[c] = torch.mean(feats_c, dim=0)
 
@@ -67,6 +65,7 @@ def analysis_feat(labels, feats, args, W=None):
     h_norm = torch.norm(M - mean_all.unsqueeze(0), dim=-1).mean().item()
     w_norm = torch.norm(W, dim=-1).mean().item()
 
+    # =========== NC1
     Sigma_b = (M - mean_all.unsqueeze(0)).T @ (M - mean_all.unsqueeze(0)) / args.num_classes
     Sigma_w = torch.stack([cov * num for cov, num in zip(cov_cls, num_cls)]).sum(dim=0) / sum(num_cls)
     Sigma_t = (feats - mean_all.unsqueeze(0)).T @ (feats - mean_all.unsqueeze(0)) / len(feats)
@@ -87,6 +86,12 @@ def analysis_feat(labels, feats, args, W=None):
     normalized_W = W / torch.norm(W, 'fro')
     nc3d = (torch.norm(normalized_W - normalized_M) ** 2).item()
 
+    # =========== NCC Classification Accuracy
+    centroid = centroid.to(device) if centroid is not None else M
+    dists = torch.cdist(feats, centroid)  # Compute distances to centroids [N, K]
+    pred_labels = torch.argmin(dists, dim=-1)
+    ncc_acc = (pred_labels == labels).float().mean().item()
+
     nc_dt = {
         'nc1': nc1,
         'nc2h': nc2h,
@@ -96,10 +101,11 @@ def analysis_feat(labels, feats, args, W=None):
         'h_norm': h_norm,
         'w_norm': w_norm,
         'nc1_cls': nc1_cls, 
-        'var_cls': var_cls
+        'var_cls': var_cls,
+        'ncc_acc': ncc_acc
     }
 
-    return nc_dt
+    return nc_dt, M
 
 
 def analysis(model, loader, args):
