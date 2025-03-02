@@ -28,7 +28,10 @@ def get_scheduler(args, optimizer):
     :return: scheduler
     """
     if args.scheduler in ['ms', 'multi_step']:
-        return optim.lr_scheduler.MultiStepLR(optimizer, milestones=[150], gamma=0.1)
+        if args.dset == 'tinyi':
+            return optim.lr_scheduler.MultiStepLR(optimizer, milestones=[100, 200], gamma=0.1)
+        else: 
+            return optim.lr_scheduler.MultiStepLR(optimizer, milestones=[150, 350], gamma=0.1)
     elif args.scheduler in ['cos', 'cosine']:
         return optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.max_epochs)
 

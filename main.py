@@ -145,69 +145,75 @@ def main(args):
     # ====================  start training ====================
     wandb.watch(model, criterion, log=None)
     for epoch in range(args.max_epochs):
+        
+        # ==================== train         
         train_loss, train_kl_loss, train_acc = train_one_epoch(model, criterion, train_loader, optimizer, args, state=state)
         lr_scheduler.step()
-            
-        # ================= check ECE
+        
+        # ================= check NC
         if (epoch + 1) % args.log_freq == 0 or epoch == 0:
+            logits, labels, feats = get_logits_labels_feats(train_loader, model)  # on cuda
+            nc_train, centroid = analysis_feat(labels, feats, args, W=model.classifier.weight.detach(),centroid=None)
+            train_loss1 = F.cross_entropy(logits, labels, reduction='mean').item() 
+            train_acc1 = (logits.argmax(dim=-1) == labels).sum().item()/len(labels)
+            train_loss2 = F.cross_entropy(logits/(nc_train['h_norm']*nc_train['w_norm'] + 1e-8), labels, reduction='mean').item()
+            
             logits, labels, feats = get_logits_labels_feats(test_loader, model)   # on cuda
             val_loss = F.cross_entropy(logits, labels, reduction='mean').item()   # on cuda 
             val_acc = (logits.argmax(dim=-1) == labels).sum().item()/len(labels)  # on cuda
             val_acc_cls = classwise_acc(labels.cpu().numpy(), logits.argmax(dim=-1).cpu().numpy())
-
-            if args.ece_flag:
-                val_ece15 = ece_criterion15(logits, labels).item()  # on cuda
-                val_ece20 = ece_criterion20(logits, labels).item()  # on cuda
-                val_ece25 = ece_criterion25(logits, labels).item()  # on cuda
-
-                # post process ece
-                scaled_model = ModelWithTemperature(model)
-                val_ece20_post, _ = scaled_model.set_temperature(test_loader, cross_validate='ece', 
-                                                                n_bins=20, ece_type=args.ece_type)
-            else:
-                val_ece15, val_ece20, val_ece25, val_ece20_post = None, None, None, None
-                scaled_model = None
+            
+            nc_val, _ = analysis_feat(labels, feats, args, W=model.classifier.weight.detach(), centroid=centroid)
+            state['var_cls'] = nc_train['var_cls']
             
             wandb.log({
                 'overall/lr': optimizer.param_groups[0]['lr'],
-                'overall/train_loss': train_loss.avg,
-                'overall/train_kl_loss': train_kl_loss.avg,
-                'overall/train_acc': train_acc.avg,
                 'overall/val_loss': val_loss,
                 'overall/val_acc': val_acc,
-                'ece/val_ece15': val_ece15 if args.ece_flag else 0,
-                'ece/val_ece20': val_ece20 if args.ece_flag else 0,
-                'ece/val_ece25': val_ece25 if args.ece_flag else 0,
-                'ece/val_ece20_post': val_ece20_post if args.ece_flag else 0,
-                'ece/best_temp': scaled_model.temperature if args.ece_flag else 0
-                }, step=epoch)
-
-            # ================= check NCs
-            logits, labels, feats = get_logits_labels_feats(train_loader, model)  # on cuda
-            nc_train, centroid = analysis_feat(labels, feats, args, W=model.classifier.weight.detach(),centroid=None)
-            nc_val, _ = analysis_feat(labels, feats, args, W=model.classifier.weight.detach(), centroid=centroid)
-            state['var_cls'] = nc_train['var_cls']
-
-            wandb.log({
+                'overall/train_loss': train_loss.avg,
+                'overall/train_acc': train_acc.avg,
+                
+                'overall/train_acc1':train_acc1,
+                'overall/train_loss1':train_loss1, 
+                'overall/train_loss2':train_loss2,
+                
                 'train_nc/nc1': nc_train['nc1'],  'train_nc/nc2': nc_train['nc2'],
                 'train_nc/nc3': nc_train['nc3'],  'train_nc/nc2h': nc_train['nc2h'],
                 'train_nc/ncc_acc': nc_train['ncc_acc'],
-
                 'other_nc/w_norm': nc_train['w_norm'], 'other_nc/h_norm': nc_train['h_norm'],
-                'otehr_nc/nc2w': nc_train['nc2w'],
-
+                'other_nc/nc2w': nc_train['nc2w'],
+                
                 'val_nc/nc1': nc_val['nc1'], 'val_nc/nc2': nc_val['nc2'],
                 'val_nc/nc3': nc_val['nc3'], 'val_nc/nc2h': nc_val['nc2h'],
                 'val_nc/ncc_acc': nc_val['ncc_acc'],
             }, step=epoch)
             
-            if (epoch + 1) % (args.log_freq*5) == 0 or epoch == 0:
-                data = [[label, nc1_tr, nc1_va, var_tr, var_va, acc] for (label, nc1_tr, nc1_va, var_tr, var_va, acc) in
-                        zip(np.arange(args.num_classes), nc_train['nc1_cls'], nc_val['nc1_cls'], nc_train['var_cls'], nc_val['var_cls'], val_acc_cls)]
-                table = wandb.Table(data=data, columns=["label", "nc1_train", 'nc1_val', 'var_train', 'var_val', 'acc'])
-                wandb.log({"per class nc1 train": wandb.plot.bar(table, "label", "var_train", title="var train")}, step=epoch)
-                wandb.log({"per class nc1 val": wandb.plot.bar(table, "label", "var_val", title="var val")}, step=epoch)
-                wandb.log({"per class acc val": wandb.plot.bar(table, "label", "acc", title="val acc")}, step=epoch)
+            # ================= check ECE
+            if args.ece_flag:
+                val_ece15 = ece_criterion15(logits, labels).item()  # on cuda
+                val_ece20 = ece_criterion20(logits, labels).item()  # on cuda
+                val_ece25 = ece_criterion25(logits, labels).item()  # on cuda
+                # post process ece
+                scaled_model = ModelWithTemperature(model)
+                val_ece20_post, _ = scaled_model.set_temperature(test_loader, cross_validate='ece', 
+                                                                n_bins=20, ece_type=args.ece_type)
+                wandb.log({
+                    'ece/val_ece15': val_ece15,
+                    'ece/val_ece20': val_ece20,
+                    'ece/val_ece25': val_ece25,
+                    'ece/val_ece20_post': val_ece20_post,
+                    'ece/best_temp': scaled_model.temperature,
+                    }, step=epoch)
+        
+        # ==================== log train loss 
+            
+            # if (epoch + 1) % (args.log_freq*5) == 0 or epoch == 0:
+            #     data = [[label, nc1_tr, nc1_va, var_tr, var_va, acc] for (label, nc1_tr, nc1_va, var_tr, var_va, acc) in
+            #             zip(np.arange(args.num_classes), nc_train['nc1_cls'], nc_val['nc1_cls'], nc_train['var_cls'], nc_val['var_cls'], val_acc_cls)]
+            #     table = wandb.Table(data=data, columns=["label", "nc1_train", 'nc1_val', 'var_train', 'var_val', 'acc'])
+            #     wandb.log({"per class nc1 train": wandb.plot.bar(table, "label", "var_train", title="var train")}, step=epoch)
+            #     wandb.log({"per class nc1 val": wandb.plot.bar(table, "label", "var_val", title="var val")}, step=epoch)
+            #     wandb.log({"per class acc val": wandb.plot.bar(table, "label", "acc", title="val acc")}, step=epoch)
 
             # try:
             #     nc_train_all.load_dt(nc_train, epoch=epoch)

@@ -10,7 +10,7 @@ from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 from .data_transform import GaussianBlur, get_moco_base_augmentation
 
-data_folder = '/' # for greene,  '../dataset' for local
+data_folder = '../dataset' # for greene,  '../dataset' for local
 
 
 def get_dataloader(args):
@@ -59,7 +59,7 @@ def get_dataloader(args):
             transforms.ToTensor(),
             normalize
         ])
-        test_tranform = get_moco_base_augmentation(min_scale=args.min_scale, normalize=normalize, size=96) if args.test_ood else transform
+        test_tranform = transform
         train_loader = torch.utils.data.DataLoader(
             datasets.STL10('data', split='train', download=True, transform=transform),
             batch_size=args.batch_size, shuffle=True, 
@@ -100,11 +100,12 @@ def get_dataloader(args):
         transform = transforms.Compose([transforms.ToTensor(),
                                         normalize,
                                         ])
-        test_tranform = get_moco_base_augmentation(min_scale=args.min_scale, normalize=normalize, size=64) if args.test_ood else transform
+        test_transform = transform
+        
         train_dataset = datasets.ImageFolder(os.path.join(data_folder, 'tiny-imagenet-200', 'train'), transform)
-        train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
-
-        test_dataset = datasets.ImageFolder(os.path.join(data_folder, 'tiny-imagenet-200', 'val'), test_tranform)
-        test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False)
+        test_dataset = datasets.ImageFolder(os.path.join(data_folder, 'tiny-imagenet-200', 'val/organized_val'), test_transform)
+        
+        train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=4, pin_memory=True)
+        test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=4, pin_memory=True)
 
     return train_loader, test_loader
